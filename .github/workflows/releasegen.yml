@@ -1,0 +1,106 @@
+name: Release by Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to create a release from'
+        required: true
+        default: 'main'
+      version:
+        description: 'Specify the semantic version for the release'
+        required: true
+      reason:
+        description: 'Reason for the manual release'
+        required: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      GOPROXY: proxy.golang.org,direct
+
+    steps:
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASEGEN_APP_ID }}
+          private-key: ${{ secrets.RELEASEGEN_APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
+          fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 #v6
+        with:
+          go-version: '1.26'
+
+      - name: Build and run ReleaseGen
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REF_NAME: ${{ github.event.inputs.branch || github.ref_name }}
+          MANUAL_VERSION: ${{ github.event.inputs.version || '' }}
+          REASON: ${{ github.event.inputs.reason || '' }}
+          CUSTOM_CHANGE_TYPES: |
+            Documentation:patch
+        run: |
+          go build -trimpath -ldflags "-s -w" -o release-gen ./cmd/releasegen
+          # releasegen prints the self-release version on stdout (and only
+          # when releasegen itself was the module released this run); all
+          # logs go to stderr. tail -n1 hardens against any stray stdout
+          # output from future changes.
+          VERSION=$(./release-gen | tail -n1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        if: env.VERSION != ''
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: env.VERSION != ''
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Extract Docker metadata
+        id: meta
+        if: env.VERSION != ''
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.7.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ github.sha }}
+            type=semver,pattern={{version}},value=v${{ env.VERSION }}
+            type=semver,pattern=v{{major}},value=v${{ env.VERSION }}
+
+      - name: Build and push Docker image
+        if: env.VERSION != ''
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: deployments/Dockerfile
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max

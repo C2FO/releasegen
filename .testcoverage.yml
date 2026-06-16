@@ -1,0 +1,24 @@
+# Configuration for vladopajic/go-test-coverage.
+# See https://github.com/vladopajic/go-test-coverage for full schema.
+
+# Path to coverage profile file produced by `go test -coverprofile`.
+profile: coverage.out
+
+# Coverage thresholds (percentages, 0-100). Bump as coverage improves; never lower.
+threshold:
+  # Minimum overall project coverage.
+  total: 81
+  # Minimum coverage required for each package.
+  package: 66
+  # Minimum coverage required for individual files.
+  file: 65
+
+# Exclude generated and non-testable code from coverage statistics.
+exclude:
+  paths:
+    - mocks/
+
+breakdown-file-name: ''
+
+diff:
+  base-breakdown-file-name: ''
