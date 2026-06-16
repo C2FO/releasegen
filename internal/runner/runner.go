@@ -153,7 +153,7 @@ func (r *Runner) processModule(ctx context.Context, c discovery.Candidate) (Modu
 		ChangelogPath: c.Path,
 	}
 
-	logging.Group(r.stderr, r.ci, fmt.Sprintf("Handling %s", c.Path))
+	logging.Group(r.stderr, r.ci, "Handling "+c.Path)
 	defer logging.EndGroup(r.stderr, r.ci)
 
 	abs, err := filepath.Abs(filepath.Join(r.cfg.RepoRoot, c.Path))
