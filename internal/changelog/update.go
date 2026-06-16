@@ -2,6 +2,7 @@ package changelog
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c2fo/releasegen/internal/config"
@@ -53,7 +54,11 @@ func Update(req UpdateRequest) (UpdateResult, error) {
 	promoted := unreleased
 	if manual {
 		nextVersion = req.ManualVersion
-		promoted = fmt.Sprintf("%s\n\nManual release by %s: %s", unreleased, req.Actor, req.ManualReason)
+		footer := "Manual release by " + req.Actor
+		if strings.TrimSpace(req.ManualReason) != "" {
+			footer += ": " + req.ManualReason
+		}
+		promoted = unreleased + "\n\n" + footer
 	}
 
 	now := req.Now

@@ -457,7 +457,7 @@ By default, `ReleaseGen` follows the Keep a Changelog headings and SemVer rules.
 
 ```yaml
 CUSTOM_CHANGE_TYPES: |
-  Documentation:patch
+  Documentation:minor
 ```
 
 See the [Workflow Example](#workflow-example) for how to set this in a GitHub Actions workflow.

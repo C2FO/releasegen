@@ -77,14 +77,18 @@ type Options struct {
 	Stderr   io.Writer // for raw GitHub Actions group markers
 }
 
-// New constructs a Runner. All fields in Options are required except Now
-// (defaults to time.Now) and Stderr (defaults to os.Stderr).
+// New constructs a Runner. Config, Repo, and Releaser are required. Logger,
+// Now, and Stderr are optional and default to a stderr logger, time.Now, and
+// os.Stderr respectively, so a zero-valued Logger never causes a nil panic.
 func New(opts Options) *Runner {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
+	}
+	if opts.Logger == nil {
+		opts.Logger = logging.New(logging.Options{Writer: opts.Stderr})
 	}
 	return &Runner{
 		cfg:        opts.Config,

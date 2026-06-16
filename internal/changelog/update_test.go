@@ -93,6 +93,25 @@ func (s *UpdateTestSuite) TestUpdate() {
 			wantVersion: "9.9.9",
 			wantSection: "### Added\n- New feature X.\n\nManual release by operator: hotfix",
 		},
+		{
+			name: "manual override without reason omits dangling colon",
+			req: changelog.UpdateRequest{
+				Content: `
+## [Unreleased]
+### Added
+- New feature X.
+
+## [v1.2.3] - 2024-08-09
+`,
+				OwnerRepo:     "owner/repo",
+				ManualVersion: "9.9.9",
+				ManualReason:  "",
+				Actor:         "operator",
+				Now:           now,
+			},
+			wantVersion: "9.9.9",
+			wantSection: "### Added\n- New feature X.\n\nManual release by operator",
+		},
 	}
 
 	for i := range tests {

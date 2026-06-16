@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -97,6 +98,31 @@ func (s *RunnerTestSuite) TestHappyPath_SingleModuleReleased() {
 	s.Equal(runner.StatusReleased, res.Status)
 	s.Equal("1.1.0", res.NextVersion)
 	s.Equal("v1.1.0", res.ReleaseName)
+}
+
+func (s *RunnerTestSuite) TestNewDefaultsLoggerWhenNil() {
+	s.stageChangelog("CHANGELOG.md", `## [Unreleased]
+### Added
+- new feature
+
+## [v1.0.0] - 2024-01-01
+`)
+	s.repo.EXPECT().CommitTagAndPush(mock.Anything, mock.Anything).Return(nil).Once()
+	s.releaser.EXPECT().CreateRelease(mock.Anything, mock.Anything).Return(nil).Once()
+
+	// A nil Logger must not cause a nil-pointer panic; New should default it.
+	r := runner.New(runner.Options{
+		Config:   s.cfg,
+		Repo:     s.repo,
+		Releaser: s.releaser,
+		Logger:   nil,
+		Now:      func() time.Time { return s.now },
+		Stderr:   io.Discard,
+	})
+	sum, err := r.Run(context.Background())
+	s.Require().NoError(err)
+	s.Require().Len(sum.Modules, 1)
+	s.Equal(runner.StatusReleased, sum.Modules[0].Status)
 }
 
 func (s *RunnerTestSuite) TestSkipsModuleWithEmptyUnreleased() {

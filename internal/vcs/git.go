@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -179,16 +180,38 @@ func (g *GitRepo) IsChangelogModifiedSinceTag(ctx context.Context, changelogPath
 		return false, fmt.Errorf("%w: load HEAD commit: %w", ErrVCS, err)
 	}
 
-	patch, err := tagCommit.Patch(headCommit)
+	// Compare only the changelog blob between the two commit trees instead of
+	// computing a full repo-wide patch. This is O(tree lookup) rather than
+	// O(repo size), which matters on large repositories. A differing hash
+	// (including the file being added or removed, represented by the zero
+	// hash) means the changelog changed between the tag and HEAD.
+	tagHash, err := changelogBlobHash(tagCommit, changelogPath)
 	if err != nil {
-		return false, fmt.Errorf("%w: compute patch from %s..HEAD: %w", ErrVCS, tagName, err)
+		return false, fmt.Errorf("%w: read %s at tag %q: %w", ErrVCS, changelogPath, tagName, err)
 	}
-	for _, fs := range patch.Stats() {
-		if fs.Name == changelogPath {
-			return true, nil
+	headHash, err := changelogBlobHash(headCommit, changelogPath)
+	if err != nil {
+		return false, fmt.Errorf("%w: read %s at HEAD: %w", ErrVCS, changelogPath, err)
+	}
+	return tagHash != headHash, nil
+}
+
+// changelogBlobHash returns the blob hash of changelogPath within the given
+// commit's tree. When the file does not exist in that tree it returns the
+// zero hash (so an added or removed file registers as a change).
+func changelogBlobHash(c *object.Commit, changelogPath string) (plumbing.Hash, error) {
+	tree, err := c.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	entry, err := tree.FindEntry(changelogPath)
+	if err != nil {
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+			return plumbing.ZeroHash, nil
 		}
+		return plumbing.ZeroHash, err
 	}
-	return false, nil
+	return entry.Hash, nil
 }
 
 // CommitTagAndPush stages, commits, pushes, tags, and pushes the tag for a

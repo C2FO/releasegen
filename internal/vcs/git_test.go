@@ -67,8 +67,10 @@ func (s *VCSTestSuite) TestIntegration() {
 	_, err = repo.CreateTag("v1.0.0", c1, &git.CreateTagOptions{Tagger: sig, Message: "v1.0.0"})
 	s.Require().NoError(err)
 
-	// Modify only the submodule changelog.
+	// Modify the submodule changelog and add a brand-new module changelog
+	// that did not exist at the v1.0.0 tag.
 	writeFile("submodule/CHANGELOG.md", "## [Unreleased]\n### Added\n- new\n")
+	writeFile("newmod/CHANGELOG.md", "## [Unreleased]\n### Added\n- first\n")
 	_, err = wt.Commit("update sub", &git.CommitOptions{Author: sig})
 	s.Require().NoError(err)
 
@@ -84,7 +86,7 @@ func (s *VCSTestSuite) TestIntegration() {
 
 	paths, err := g.AllChangelogPaths(ctx)
 	s.Require().NoError(err)
-	s.ElementsMatch([]string{"CHANGELOG.md", "submodule/CHANGELOG.md"}, paths)
+	s.ElementsMatch([]string{"CHANGELOG.md", "submodule/CHANGELOG.md", "newmod/CHANGELOG.md"}, paths)
 
 	tags, err := g.ReachableTags(ctx)
 	s.Require().NoError(err)
@@ -99,6 +101,17 @@ func (s *VCSTestSuite) TestIntegration() {
 	subMod, err := g.IsChangelogModifiedSinceTag(ctx, "submodule/CHANGELOG.md", "v1.0.0")
 	s.Require().NoError(err)
 	s.True(subMod, "submodule changelog was modified after v1.0.0")
+
+	// A changelog that did not exist at the tag but exists at HEAD counts as
+	// modified (absent blob -> zero hash differs from the real blob).
+	addedMod, err := g.IsChangelogModifiedSinceTag(ctx, "newmod/CHANGELOG.md", "v1.0.0")
+	s.Require().NoError(err)
+	s.True(addedMod, "newmod changelog was added after v1.0.0")
+
+	// A changelog that exists in neither tree is unchanged (both zero hash).
+	absent, err := g.IsChangelogModifiedSinceTag(ctx, "nonexistent/CHANGELOG.md", "v1.0.0")
+	s.Require().NoError(err)
+	s.False(absent, "a path absent from both trees is not a modification")
 
 	// Initial release case (no tag) returns true.
 	first, err := g.IsChangelogModifiedSinceTag(ctx, "submodule/CHANGELOG.md", "")
