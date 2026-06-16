@@ -18,7 +18,9 @@ It is a good fit when you want:
 - **Language-agnostic monorepo releases.** A "module" is just any directory containing a `CHANGELOG.md`. Each gets its own independent version line and tag (e.g. `services/api/v1.2.3`). It works equally well for Go, Node, Python, or polyglot repos — it never inspects your source.
 - **One small, auditable step.** A single static binary (or container image) that does exactly one thing: turn curated changelog intent into a tag + GitHub Release. It composes with whatever builds and publishes your artifacts, rather than replacing them.
 - **Safe by default.** `--dry-run` previews every decision, runs fail atomically (a bad module aborts the run rather than half-releasing), bearer tokens are scrubbed from error output, and structured exit codes let CI branch on the failure class instead of grepping logs.
+
 ![releasegen-features.png](docs/images/releasegen-features.png)
+
 ### How it compares
 
 | Tool | Decides version from | Monorepo model | Scope |
@@ -80,7 +82,9 @@ ReleaseGen inspects the `CHANGELOG.md` file for notable changes and applies vers
 If you maintain multiple modules in a single repository (a monorepo), ReleaseGen will:
 1.	Detect all `CHANGELOG.md` files in different subdirectories.
 2.	Assign separate release tags to each directory that has new changes under ## [Unreleased].
+
 ![releasegen-mono.png](docs/images/releasegen-mono.png)
+
 #### Single Module (Root)
 
 - The tag is simply `vX.Y.Z` (e.g., `v1.2.3`).
