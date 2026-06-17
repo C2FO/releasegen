@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Self-release detection now recognizes releasegen running from the repository
+  root. `RELEASEGEN_SELF_MODULE` defaults to the root module (empty path) and the
+  feature is gated on `RELEASEGEN_SELF_REPO`, so the released version is printed
+  to stdout and downstream steps (e.g. the Docker build/push) are no longer skipped.
+### Changed
+- **BREAKING CHANGE** - No change, just bumping to v1.0.0.
 
 ## [[v0.1.0](https://github.com/C2FO/releasegen/releases/tag/v0.1.0)] - 2026-06-16
 ### Added

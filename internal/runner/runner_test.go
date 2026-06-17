@@ -45,7 +45,7 @@ func (s *RunnerTestSuite) SetupTest() {
 		Actor:             "tester",
 		Branch:            "main",
 		RepoRoot:          s.tmpDir,
-		SelfReleaseModule: "releasegen",
+		SelfReleaseModule: "", // releasegen is the root module
 		SelfReleaseRepo:   "c2fo/releasegen",
 	}
 }
@@ -208,11 +208,13 @@ func (s *RunnerTestSuite) TestSummaryFileWritten() {
 }
 
 func (s *RunnerTestSuite) TestReleaseGenSelfReleaseTracked() {
+	// releasegen lives at the root of c2fo/releasegen, so the root module
+	// (module name "") releasing itself must be tracked as a self-release.
 	s.cfg.OwnerRepo = "c2fo/releasegen"
-	s.stageChangelog("releasegen/CHANGELOG.md", `## [Unreleased]
+	s.stageChangelog("CHANGELOG.md", `## [Unreleased]
 ### Added
 - x
-## [releasegen/v1.0.0] - 2024-01-01
+## [v1.0.0] - 2024-01-01
 `)
 	s.repo.EXPECT().CommitTagAndPush(mock.Anything, mock.Anything).Return(nil).Once()
 	s.releaser.EXPECT().CreateRelease(mock.Anything, mock.Anything).Return(nil).Once()
@@ -221,4 +223,22 @@ func (s *RunnerTestSuite) TestReleaseGenSelfReleaseTracked() {
 	s.Require().NoError(err)
 	s.True(sum.ReleaseGenReleased)
 	s.Equal("1.1.0", sum.ReleaseGenVersion)
+}
+
+func (s *RunnerTestSuite) TestSelfReleaseNotTrackedInOtherRepo() {
+	// The same root-module release in a different repository must not be
+	// treated as a releasegen self-release.
+	s.cfg.OwnerRepo = "acme/widgets"
+	s.stageChangelog("CHANGELOG.md", `## [Unreleased]
+### Added
+- x
+## [v1.0.0] - 2024-01-01
+`)
+	s.repo.EXPECT().CommitTagAndPush(mock.Anything, mock.Anything).Return(nil).Once()
+	s.releaser.EXPECT().CreateRelease(mock.Anything, mock.Anything).Return(nil).Once()
+
+	sum, err := s.newRunner().Run(context.Background())
+	s.Require().NoError(err)
+	s.False(sum.ReleaseGenReleased)
+	s.Empty(sum.ReleaseGenVersion)
 }

@@ -37,10 +37,13 @@ type Config struct {
 	SummaryFile string
 
 	// SelfReleaseModule and SelfReleaseRepo together identify the
-	// "releasegen releasing itself" case: when a module with this name
-	// is released inside this repository, the resulting version is
-	// printed to stdout for downstream workflow steps to consume.
-	// Both must be non-empty for the feature to be active.
+	// "releasegen releasing itself" case: when the module with this name is
+	// released inside SelfReleaseRepo, the resulting version is printed to
+	// stdout for downstream workflow steps to consume. SelfReleaseModule is
+	// the module's directory path relative to the repo root; an empty value
+	// means the root module (releasegen lives at the repository root). The
+	// feature is active whenever SelfReleaseRepo is non-empty and matches
+	// the repository being released; set SelfReleaseRepo to "" to disable.
 	SelfReleaseModule string
 	SelfReleaseRepo   string
 }
@@ -102,18 +105,20 @@ func FromEnv() (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		Token:             os.Getenv("GITHUB_TOKEN"),
-		OwnerRepo:         os.Getenv("GITHUB_REPOSITORY"),
-		Actor:             os.Getenv("GITHUB_ACTOR"),
-		Branch:            os.Getenv("GITHUB_REF_NAME"),
-		ManualVersion:     os.Getenv("MANUAL_VERSION"),
-		Reason:            os.Getenv("REASON"),
-		ExcludeDirs:       ParseExcludeDirs(os.Getenv("EXCLUDE_DIRS")),
-		CustomTypes:       customTypes,
-		Debug:             strings.EqualFold(os.Getenv("DEBUG"), "true"),
-		RepoRoot:          envOr("REPO_ROOT", "."),
-		SummaryFile:       os.Getenv("SUMMARY_FILE"),
-		SelfReleaseModule: envOr("RELEASEGEN_SELF_MODULE", "releasegen"),
+		Token:         os.Getenv("GITHUB_TOKEN"),
+		OwnerRepo:     os.Getenv("GITHUB_REPOSITORY"),
+		Actor:         os.Getenv("GITHUB_ACTOR"),
+		Branch:        os.Getenv("GITHUB_REF_NAME"),
+		ManualVersion: os.Getenv("MANUAL_VERSION"),
+		Reason:        os.Getenv("REASON"),
+		ExcludeDirs:   ParseExcludeDirs(os.Getenv("EXCLUDE_DIRS")),
+		CustomTypes:   customTypes,
+		Debug:         strings.EqualFold(os.Getenv("DEBUG"), "true"),
+		RepoRoot:      envOr("REPO_ROOT", "."),
+		SummaryFile:   os.Getenv("SUMMARY_FILE"),
+		// Empty default: releasegen lives at the root of c2fo/releasegen, so
+		// the root module (module name "") is the self-release module.
+		SelfReleaseModule: os.Getenv("RELEASEGEN_SELF_MODULE"),
 		SelfReleaseRepo:   envOr("RELEASEGEN_SELF_REPO", "c2fo/releasegen"),
 	}, nil
 }
