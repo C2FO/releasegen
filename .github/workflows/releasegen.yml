@@ -67,6 +67,10 @@ jobs:
           VERSION=$(./release-gen | tail -n1)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      - name: Compute lowercase image name
+        if: env.VERSION != ''
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
         if: env.VERSION != ''
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
@@ -84,7 +88,7 @@ jobs:
         if: env.VERSION != ''
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.7.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest
             type=raw,value=${{ github.sha }}
@@ -102,5 +106,5 @@ jobs:
             VERSION=${{ env.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
