@@ -129,7 +129,7 @@ func (s *ConfigTestSuite) TestFromEnv_Defaults() {
 	s.Require().NoError(err)
 	s.Equal(".", cfg.RepoRoot)
 	s.Empty(cfg.SummaryFile)
-	s.Equal("releasegen", cfg.SelfReleaseModule)
+	s.Empty(cfg.SelfReleaseModule)
 	s.Equal("c2fo/releasegen", cfg.SelfReleaseRepo)
 }
 

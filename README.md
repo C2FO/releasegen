@@ -1,27 +1,44 @@
-![releasegen-logo.png](docs/images/releasegen-logo.png)
+![ReleaseGen — changelog-driven releases, automated](docs/images/releasegen-logo.png)
 
 # ReleaseGen
 
----
+> Turn the `CHANGELOG.md` you already maintain into versioned Git tags and GitHub Releases — automatically.
 
-`ReleaseGen` is a Go application designed to automate versioning and release creation based on the content of `CHANGELOG.md` files. The application adheres to Semantic Versioning (SemVer) principles, ensuring that versions are incremented correctly based on the types of changes documented in your changelog.
+ReleaseGen is a small Go tool that reads your changelog and does the mechanical part of cutting a release for you. You write a normal [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) entry under `## [Unreleased]`; when you merge to your release branch, ReleaseGen:
 
-You write a normal, human-readable [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) entry under `## [Unreleased]`; when you merge to your release branch, ReleaseGen decides the next version, promotes those notes into a numbered section, commits and tags it, and publishes a matching GitHub Release. That's the whole job — no plugins, no runtime, no DSL.
+1. decides the next [SemVer](https://semver.org/spec/v2.0.0.html) version from the kinds of changes you listed,
+2. promotes those notes into a new numbered section and commits it,
+3. creates the matching Git tag, and
+4. publishes a GitHub Release using your changelog notes as the body.
+
+That's the whole job — no plugins, no runtime, no DSL, and it never inspects your source code.
+
+## Table of Contents
+
+- [Why ReleaseGen?](#why-releasegen)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Writing Your `CHANGELOG.md`](#writing-your-changelogmd)
+- [GitHub Actions Integration](#github-actions-integration)
+- [Configuration](#configuration)
+- [Building From Source](#building-from-source)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Why ReleaseGen?
 
-Most release automation derives the version and notes from **commit messages** (Conventional Commits) or from special **intent files**. ReleaseGen takes the position that the changelog you already maintain *is* the source of truth, and that the only thing standing between a merged PR and a published release is mechanical work a tool should do for you.
+Most release automation derives the version and notes from **commit messages** (Conventional Commits) or from special **intent files**. ReleaseGen takes the position that the changelog you already curate *is* the source of truth, and that the only thing standing between a merged PR and a published release is mechanical work a tool should do for you.
 
-It is a good fit when you want:
+It's a good fit when you want:
 
 - **Changelog-driven, not commit-driven.** Your `CHANGELOG.md` is the contract. You don't have to enforce Conventional Commits, squash policies, or commit linting across every contributor to get correct versions.
-- **Language-agnostic monorepo releases.** A "module" is just any directory containing a `CHANGELOG.md`. Each gets its own independent version line and tag (e.g. `services/api/v1.2.3`). It works equally well for Go, Node, Python, or polyglot repos — it never inspects your source.
-- **One small, auditable step.** A single static binary (or container image) that does exactly one thing: turn curated changelog intent into a tag + GitHub Release. It composes with whatever builds and publishes your artifacts, rather than replacing them.
-- **Safe by default.** `--dry-run` previews every decision, runs fail atomically (a bad module aborts the run rather than half-releasing), bearer tokens are scrubbed from error output, and structured exit codes let CI branch on the failure class instead of grepping logs.
+- **Language-agnostic monorepo releases.** A "module" is just any directory containing a `CHANGELOG.md`. Each gets its own independent version line and tag (e.g. `services/api/v1.2.3`). It works equally well for Go, Node, Python, or polyglot repos.
+- **One small, auditable step.** A single static binary (or container image) that does exactly one thing and composes with whatever already builds and publishes your artifacts, rather than replacing it.
+- **Safety by default.** `--dry-run` previews every decision, a bad module aborts the run instead of half-releasing, tokens are scrubbed from error output, and structured exit codes let CI branch on the failure class instead of grepping logs.
 
-![releasegen-features.png](docs/images/releasegen-features.png)
-
-### How it compares
+### How It Compares
 
 | Tool | Decides version from | Monorepo model | Scope |
 | ---- | -------------------- | -------------- | ----- |
@@ -29,9 +46,26 @@ It is a good fit when you want:
 | semantic-release | Conventional Commit messages | Plugins / extra config | Versioning + publishing (Node-centric) |
 | release-please | Conventional Commit messages | Release PRs per package | Release PR + tag + release |
 | Changesets | Hand-written intent files (`.changeset/`) | First-class (JS/TS workspaces) | Versioning + publishing (JS-centric) |
-| GoReleaser | Existing git tags | N/A (builds artifacts) | Build + package + publish |
+| GoReleaser | Existing Git tags | N/A (builds artifacts) | Build + package + publish |
 
 ReleaseGen deliberately does **not** build artifacts, publish to package registries, open PRs, or write your changelog for you. If you need those, run ReleaseGen for the version/tag/release step and pair it with your existing build tooling.
+
+## Features
+
+![ReleaseGen feature overview](docs/images/releasegen-features.png)
+
+- **Automatic SemVer versioning.** The kinds of changes under `## [Unreleased]` decide whether the next version is a major, minor, or patch bump.
+- **Monorepo support.** Discovers every `CHANGELOG.md` in the repo and releases each module independently with its own version line and tag.
+- **GitHub Releases.** Creates the tag and a GitHub Release whose notes come straight from your changelog.
+- **Dry-run previews.** `--dry-run` prints the next version and bump type without rewriting files, committing, pushing, tagging, or publishing.
+- **Atomic, fail-fast runs.** A failing module aborts the run rather than leaving you half-released.
+- **Structured exit codes.** Distinct codes for config, changelog, Git, and API failures so CI can branch on the failure class. See [Exit Codes](#exit-codes).
+- **Machine-readable summaries.** `--summary-file` writes a JSON summary of the run for downstream steps to consume instead of scraping logs.
+- **Config via flags or env.** Every environment variable has an equivalent CLI flag; flags take precedence over env, which takes precedence over built-in defaults.
+- **Custom change types.** Map your own changelog headings (e.g. `Documentation`) to a specific bump level.
+- **Debug logging.** `--debug` traces tag discovery and module-name extraction for troubleshooting.
+- **Secure by default.** Bearer tokens are scrubbed from Git push errors before they reach the logs.
+- **Structured logging.** `log/slog`-based output; under GitHub Actions it emits `::group::` / `::endgroup::` / `::error::` markers, and plain text locally.
 
 ## Quick Start
 
@@ -41,137 +75,67 @@ Install the CLI with Go:
 go install github.com/c2fo/releasegen/cmd/releasegen@latest
 ```
 
-Or pull the container image from GitHub Container Registry:
+…or pull the container image from GitHub Container Registry:
 
 ```bash
 docker pull ghcr.io/c2fo/releasegen:latest
 ```
 
-Preview what would happen for your repo without changing anything:
+Preview what a release would do for your repo, without changing anything:
 
 ```bash
-releasegen --dry-run --repo-root . --repository your-org/your-repo --branch main --actor "$USER" --token "$GH_TOKEN"
+releasegen --dry-run \
+  --repo-root . \
+  --repository your-org/your-repo \
+  --branch main \
+  --actor "$USER" \
+  --token "$GH_TOKEN"
 ```
 
 When you're ready to automate it, drop the [example GitHub Actions workflow](#workflow-example) into `.github/workflows/`.
 
-## Features
-
----
-
-- **Automatic Versioning**: Detects changes in `CHANGELOG.md` and increments your project’s version following SemVer.
-- **Monorepo Support**: Discovers changes to `CHANGELOG.md` files across different directories and generates appropriate release tags for each module.
-- **Release Tagging**: Creates a Git tag for the new version, optionally prefixed by the directory path if the `CHANGELOG.md` file is located outside the repo’s root.
-- **GitHub Releases**: Automatically creates a GitHub release, pulling release notes directly from your changelog.
-
 ## How It Works
-
----
 
 ### Versioning Logic
 
-ReleaseGen inspects the `CHANGELOG.md` file for notable changes and applies version bumps according to SemVer:
+ReleaseGen reads the entries under `## [Unreleased]` and applies the highest applicable bump:
 
-- **Major Version Bump**: If the words "BREAKING CHANGE" appear under any “Changed” or “Removed” sections, indicating backward-incompatible changes.
-- **Minor Version Bump**: If there are new features, non-breaking changes, deprecations, or security updates.
-- **Patch Version Bump**: If only bug fixes are found.
-- **Manual Version Override**: If the MANUAL_VERSION environment variable is set, it overrides the calculated version.
+| Bump | Triggered by |
+| ---- | ------------ |
+| **Major** | The exact phrase `BREAKING CHANGE` appears under a `### Changed` or `### Removed` section. |
+| **Minor** | New features (`### Added`), `### Deprecated`, or `### Security` entries. |
+| **Patch** | Only bug fixes (`### Fixed`). |
 
-### Monorepo Support & Release Tag Naming
+If `MANUAL_VERSION` (or `--manual-version`) is set, that value is used instead of the computed bump. When no tags exist yet, the repository is treated as starting from `v0.0.0`.
 
-If you maintain multiple modules in a single repository (a monorepo), ReleaseGen will:
-1.	Detect all `CHANGELOG.md` files in different subdirectories.
-2.	Assign separate release tags to each directory that has new changes under ## [Unreleased].
+### Monorepo Support & Tag Naming
 
-![releasegen-mono.png](docs/images/releasegen-mono.png)
+![ReleaseGen monorepo tag naming](docs/images/releasegen-mono.png)
 
-#### Single Module (Root)
+Any directory containing a `CHANGELOG.md` is treated as a module. ReleaseGen processes each one independently and only releases the modules whose `## [Unreleased]` section has new entries.
 
-- The tag is simply `vX.Y.Z` (e.g., `v1.2.3`).
+- **Root module** → the tag is `vX.Y.Z` (e.g. `v1.2.3`).
+- **Nested module** → the tag is prefixed with the module's path (e.g. `worker/v2.3.4` or `services/api/v0.2.0`).
 
-#### Multiple Modules (Monorepo)
-
-- The tag is prefixed by the path to the module, (e.g. `worker/v2.3.4` or `services/api/v0.2.0`).
-
-This convention keeps releases organized in larger repositories. A future enhancement may allow “flat” tag naming if you prefer to omit directory prefixes.
+Prefixing tags with the directory path keeps releases organized and prevents collisions in larger repositories.
 
 ### Custom Change Types
 
-You can define custom change types and their corresponding bump types using the `CUSTOM_CHANGE_TYPES` environment variable. For example:
+Map additional changelog headings to a bump level with `CUSTOM_CHANGE_TYPES` (or `--custom-change-types`) using newline-separated `<heading>:<bump>` pairs, where `<bump>` is `major`, `minor`, or `patch`:
 
 ```yaml
 CUSTOM_CHANGE_TYPES: |
-  documentation:patch
-  performance:minor
+  Documentation:minor
+  Performance:patch
 ```
 
 ### Debug Mode
 
-For troubleshooting tag detection issues, enable detailed logging with the `DEBUG` environment variable or the `--debug` flag:
+Set `DEBUG=true` (or pass `--debug`) to trace which tags are processed, the module names extracted from them, and which tags are added versus skipped — useful when tags aren't being detected as expected in a multi-module repo.
 
-```yaml
-DEBUG: true
-```
+## Writing Your `CHANGELOG.md`
 
-When enabled, ReleaseGen will output detailed information about:
-
-- Which tags are being processed
-- Module names extracted from tags
-- Which tags are successfully added vs skipped
-
-This is particularly useful for diagnosing issues in multi-module repositories or when tags aren't being detected as expected.
-
-### v2 highlights
-
-Releasegen v2 ships several quality-of-life and safety improvements while
-keeping the v1 contract intact for end users (CHANGELOG format, env vars,
-GitHub Actions integration). The breaking changes are mostly internal /
-distribution-side:
-
-- **New module path.** When consumed as a library, the import is
-  `github.com/c2fo/releasegen/...`. The CLI binary path is
-  unchanged inside the docker image.
-- **`c2fo/vfs/v7` and `golang.org/x/oauth2` are gone.** The binary uses the
-  standard library + `google/go-github/v68` only.
-- **CLI flags for every env var.** Every documented env var has a matching
-  `--flag`. Flags > env > built-in defaults.
-- **`--dry-run`.** Prints what would happen (next version, bump type) without
-  rewriting files, committing, pushing, tagging, or publishing. Safe to run
-  locally against your real repo.
-- **`--summary-file`** / **`SUMMARY_FILE`.** Writes a JSON summary of the
-  run that downstream workflow steps can read instead of screen-scraping
-  logs.
-- **`--repo-root`** / **`REPO_ROOT`.** Run releasegen against a worktree
-  that isn't `.`.
-- **`--version`.** Prints the build-time version.
-- **Structured exit codes.** `0` (success / nothing to do), `1` (config),
-  `2` (changelog validation), `3` (git), `4` (GitHub API), `10` (internal).
-  CI scripts can branch on these instead of grepping logs.
-- **Structured logging.** `log/slog`-based; in GitHub Actions
-  (`GITHUB_ACTIONS=true`) it still emits `::group::`, `::endgroup::`, and
-  `::error::` markers. Locally, output is plain text.
-- **Validated `MANUAL_VERSION`.** Must be a valid semver string before it is
-  used.
-- **Token scrubbing.** Bearer tokens are stripped from go-git push errors
-  before they reach the logs.
-- **Configurable self-release.** The "releasegen releasing itself" detection
-  (`RELEASEGEN_SELF_MODULE` / `RELEASEGEN_SELF_REPO`) is now overridable;
-  defaults are unchanged for c2fo/releasegen.
-
-### Building locally
-
-```bash
-go build -ldflags "-X main.version=$(git describe --tags --always)" -o release-gen ./cmd/releasegen
-./release-gen --help
-# Preview what a release would do against another checkout, without writing anything:
-./release-gen --dry-run --repo-root /path/to/your/repo --repository your-org/your-repo --branch main --actor you --token "$GH_TOKEN"
-```
-
-## Example `CHANGELOG.md`
-
----
-
-Your CHANGELOG.md should follow the `CHANGELOG.md` files following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. For example:
+Your changelog must follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. ReleaseGen reads everything under `## [Unreleased]` to compute and cut the next release.
 
 ```markdown
 # Changelog
@@ -187,15 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New feature X.
 
 ### Changed
-- Modified behavior of Y.
 - **BREAKING CHANGE**: Changed API behavior in module Z.
-
-### Removed
-- Deprecated feature W removed.
-- **BREAKING CHANGE**: Removed support for legacy API.
 
 ### Deprecated
 - Feature V is now deprecated.
+
+### Removed
+- **BREAKING CHANGE**: Removed support for the legacy API.
 
 ### Security
 - Updated dependencies for security patches.
@@ -203,68 +165,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed bug related to issue #123.
 
-## [my-project/v1.2.3] - 2024-08-09
+## [v1.2.3] - 2024-08-09
+
 ### Added
-- Another new feature.
-
-### Fixed
-- Fixed a minor bug.
-
+- A previously released feature.
 ```
 
-Note that while we require adhering to the Keep a Changelog format, `ReleaseGen` allows for custom change type headings when used with the env var `CUSTOM_CHANGE_TYPES`.
+A few conventions keep parsing reliable:
 
-## Developer Expectations
+1. **Use the standard headings** — `### Added`, `### Changed`, `### Removed`, `### Deprecated`, `### Security`, `### Fixed` (case-insensitive). Add your own via [custom change types](#custom-change-types).
+2. **Mark breaking changes** with the exact phrase `BREAKING CHANGE`. This is the only thing that triggers a major bump, which guards against accidental major releases.
+3. **Don't hand-edit version numbers.** Keep new entries under `## [Unreleased]` and let ReleaseGen promote them when you merge.
 
----
+## GitHub Actions Integration
 
-When using `ReleaseGen`, developers should follow these guidelines to ensure the application can parse the `CHANGELOG.md` file correctly:
+### GitHub App Setup (for branch protection)
 
-1. **Use Section Headings**: (`### Added`, `### Changed`, `### Removed`, `### Deprecated`, `### Security`, `### Fixed`) — these are case-insensitive.
-2. **Mark Breaking Changes**: Include the exact phrase “BREAKING CHANGE” for backward-incompatible changes to ensure a major version bump. This safeguards against unintentional major version increments.
-3. **Don’t Manually Change Versions**: Keep new changes under ## [Unreleased]. Let `ReleaseGen` handle the version bump when merged to `main`.
-4. **Maintain Consistency**: Be clear and consistent in wording so the application can parse changes accurately.
-5. **Organize New Entries**: Always add new changes under the ## [Unreleased] section so that `ReleaseGen` can move them into the next release.
+If your release branch is protected (required reviews, status checks, etc.), the release commit and tag must come from an identity allowed to bypass those rules. The cleanest way is a dedicated GitHub App:
 
-## Integrating ReleaseGen into a GitHub Actions Workflow
-
----
-
-### Prerequisites: GitHub App Setup for Branch Protection
-
-To enable ReleaseGen to work with branch protection rules (requiring PR reviews, status checks, etc.), you need to create a GitHub App that can bypass these protections:
-
-1. **Create a GitHub App**:
-  - Go to `https://github.com/settings/apps` (personal) or `https://github.com/organizations/YOUR_ORG/settings/apps` (organization)
-  - Click **New GitHub App**
-  - Set a name (e.g., `releasegen-bot`)
-  - Set Homepage URL to your repository URL
-  - Uncheck **Webhook** → Active
-  - Set **Repository permissions**:
-    - Contents: **Read and write**
-  - Click **Create GitHub App**
-  - **Save the App ID** shown at the top of the settings page
-2. **Generate Private Key**:
-  - On the app settings page, scroll to "Private keys"
-  - Click **Generate a private key**
-  - Download and save the `.pem` file securely
-3. **Install the App**:
-  - Go to app settings → **Install App** (left sidebar)
-  - Install on your organization or account
-  - Select the repositories where you want to use ReleaseGen
-4. **Add Secrets and Variables**:
-  - For each repository, go to Settings → Secrets and variables → Actions
-  - Add secret: `RELEASEGEN_APP_PRIVATE_KEY` = contents of the `.pem` file
-  - Add secret: `RELEASEGEN_APP_ID` = your App ID
-5. **Configure Branch Protection**:
-  - Go to repository Settings → Rules
-  - Create or edit branch protection for `main`
-  - Enable desired protections (PR reviews, status checks, etc.)
-  - Under **Bypass list**, add your GitHub App by name
+1. **Create a GitHub App** at `https://github.com/settings/apps` (personal) or `https://github.com/organizations/YOUR_ORG/settings/apps` (organization):
+   - Click **New GitHub App**, give it a name (e.g. `releasegen-bot`), and set the Homepage URL to your repo.
+   - Uncheck **Webhook → Active**.
+   - Under **Repository permissions**, set **Contents: Read and write**.
+   - Click **Create GitHub App** and note the **App ID**.
+2. **Generate a private key** on the app settings page ("Private keys" → **Generate a private key**) and save the `.pem` file securely.
+3. **Install the app** (left sidebar → **Install App**) on the repositories where you'll use ReleaseGen.
+4. **Add repository secrets** (Settings → Secrets and variables → Actions):
+   - `RELEASEGEN_APP_ID` = your App ID
+   - `RELEASEGEN_APP_PRIVATE_KEY` = contents of the `.pem` file
+5. **Allow the app to bypass branch protection** (Settings → Rules → your `main` ruleset → **Bypass list** → add the app).
 
 ### Workflow Example
-
-Below is an example GitHub Actions workflow to automate releases using `ReleaseGen`:
 
 ```yaml
 name: Release by Changelog
@@ -289,17 +220,16 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-
     steps:
       - name: Generate GitHub App token
         id: generate-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.RELEASEGEN_APP_ID }}
           private-key: ${{ secrets.RELEASEGEN_APP_PRIVATE_KEY }}
 
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 #v6
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch || github.ref_name }}
           fetch-depth: 0
@@ -313,14 +243,14 @@ jobs:
           GITHUB_REF_NAME: ${{ github.event.inputs.branch || github.ref_name }}
           MANUAL_VERSION: ${{ github.event.inputs.version || '' }}
           REASON: ${{ github.event.inputs.reason || '' }}
-          # Optional: EXCLUDE_DIRS exclude certain directories from changelog generation
+          # Optional: skip directories from changelog-based releases.
           EXCLUDE_DIRS: |
             some/app
             some/other/app
-          # Optional: CUSTOM_CHANGE_TYPES allow for custom change types
+          # Optional: map custom headings to bump levels.
           CUSTOM_CHANGE_TYPES: |
-            documentation:patch
-            performance:minor
+            Documentation:minor
+            Performance:patch
         run: |
           docker run --rm \
             -e GITHUB_TOKEN \
@@ -331,141 +261,106 @@ jobs:
             -e REASON \
             -e EXCLUDE_DIRS \
             -e CUSTOM_CHANGE_TYPES \
-            -v $(pwd):/workspace \
+            -v "$(pwd):/workspace" \
             ghcr.io/c2fo/releasegen:latest \
             --repo-root /workspace
 ```
 
-> The image's entrypoint is `/usr/local/bin/release-gen`, so any args after
-> the image name are passed directly. Use `--dry-run` to preview without
-> publishing, or `--summary-file /workspace/release-summary.json` to capture
-> a machine-readable result.
+> The image entrypoint is `/usr/local/bin/release-gen`, so anything after the image name is passed straight to the CLI. Add `--dry-run` to preview without publishing, or `--summary-file /workspace/release-summary.json` to capture a machine-readable result.
+>
+> The example uses readable version tags for clarity. For production, pin actions to a commit SHA.
 
-### Explanation of the Workflow
+### Manual Releases
 
-- **Generate GitHub App token**: Creates a short-lived authentication token from your GitHub App credentials that can bypass branch protection rules.
-- **Checkout repository**: Checks out your repository using the app token so that the workflow has access to the code and `CHANGELOG.md`.
-- **Run ReleaseGen**: Runs the `ReleaseGen` Docker container, which reads the `CHANGELOG.md`, determines the next version, commits the updated changelog back to the main branch, creates tags, and generates a GitHub release.
-- **Environment Variables**:
-  - `GITHUB_TOKEN`: The GitHub App token for authentication (required)
-  - `GITHUB_REPOSITORY`: The repository identifier (required)
-  - `GITHUB_ACTOR`: The user who triggered the workflow (required)
-  - `GITHUB_REF_NAME`: The release branch (required; usually injected by Actions)
-  - `MANUAL_VERSION` / `REASON`: Used by the manual workflow dispatch to force a specific version
-  - `EXCLUDE_DIRS`: Optional list of directories to exclude from changelog-based releases
-  - `CUSTOM_CHANGE_TYPES`: Optional custom change types and their corresponding version increments
-  - `REPO_ROOT`: Optional path to the git working tree (defaults to `.`; useful when invoking from outside the repo)
-  - `SUMMARY_FILE`: Optional path; when set, releasegen writes a JSON summary of the run there
-  - `DEBUG`: When `true`, emits verbose tag/discovery diagnostics
-  - `RELEASEGEN_SELF_MODULE` / `RELEASEGEN_SELF_REPO`: Identify the "releasegen releasing itself" case so that the resolved version is printed to stdout for downstream workflow steps. Defaults are `releasegen` and `c2fo/releasegen`; override only if you fork.
+To cut a release on demand (for example, from a non-default branch or to force a specific version):
 
-Every environment variable above also has an equivalent CLI flag. Flag values take precedence over environment values, which take precedence over built-in defaults.
+1. Open **Actions** → **Release by Changelog** → **Run workflow**.
+2. Choose the branch, optionally set a version and a reason, and run it.
 
-### Manual Release Workflow Dispatch
+The `version` input maps to `MANUAL_VERSION` and `reason` to `REASON`; the reason is appended to the changelog footer so the manual bump is recorded.
 
-If you want to **manually** trigger a release on a different branch:
+## Configuration
 
-1. Go to **Actions** in your repository.
-2. Select **Release by Changelog**.
-3. Click **Run workflow**.
-4. Choose the branch.
-5. (Optional) Add a reason or message.
-6. Click **Run workflow** again.
+Every option can be set by environment variable or CLI flag. **Flags override environment variables, which override built-in defaults.**
 
-This will create a release based on the changes in the specified branch.
+| Environment Variable | CLI Flag | Required | Description |
+| -------------------- | -------- | :------: | ----------- |
+| `GITHUB_TOKEN` | `--token` | ✓ | Token used to push commits/tags and create releases. |
+| `GITHUB_REPOSITORY` | `--repository` | ✓ | Repository in `<owner>/<repo>` form. |
+| `GITHUB_ACTOR` | `--actor` | ✓ | User the release commit is attributed to. |
+| `GITHUB_REF_NAME` | `--branch` | ✓ | Branch to release from. |
+| `MANUAL_VERSION` | `--manual-version` | | Force a specific SemVer instead of computing the bump. Rejected if not valid semver. |
+| `REASON` | `--reason` | | Note appended to the changelog footer for a manual release. |
+| `EXCLUDE_DIRS` | `--exclude-dirs` | | Newline-separated directories to skip during discovery. |
+| `CUSTOM_CHANGE_TYPES` | `--custom-change-types` | | Newline-separated `<heading>:<bump>` pairs. |
+| `REPO_ROOT` | `--repo-root` | | Path to the Git working tree (default `.`). |
+| `SUMMARY_FILE` | `--summary-file` | | Write a JSON summary of the run to this path. |
+| `DEBUG` | `--debug` | | Verbose tag/discovery diagnostics. |
+| — | `--dry-run` | | Compute and print actions without writing anything. |
+| — | `--version` | | Print the build version and exit. |
+
+> **Advanced:** `RELEASEGEN_SELF_MODULE` / `RELEASEGEN_SELF_REPO` control the "ReleaseGen releasing itself" case, in which the resolved version is printed to stdout for downstream steps. `RELEASEGEN_SELF_MODULE` is the module path relative to the repo root (defaults to empty, i.e. the root module) and `RELEASEGEN_SELF_REPO` defaults to `c2fo/releasegen`. The feature only triggers when `RELEASEGEN_SELF_REPO` matches the repository being released; set it to empty to disable. You only need these if you fork ReleaseGen.
+
+### Exit Codes
+
+When a run fails, the failure is logged with a `::error::` marker, no further modules are released, and the process exits non-zero with a code that tells you which layer failed:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Success, or nothing to release. |
+| `1` | Configuration error (missing/invalid input). |
+| `2` | Changelog validation error (malformed `[Unreleased]`, unknown change type, incomplete `BREAKING CHANGE`). |
+| `3` | Git error (push, tag, commit, etc.). |
+| `4` | GitHub API error (release creation). |
+| `10` | Internal error (a bug — please file an issue). |
+
+Tags or releases written before a mid-run failure are **not** rolled back. Fix the failing module, push a new commit, and rerun.
+
+## Building From Source
+
+```bash
+go build -ldflags "-X main.version=$(git describe --tags --always)" -o release-gen ./cmd/releasegen
+./release-gen --help
+
+# Preview a release against another checkout without writing anything:
+./release-gen --dry-run \
+  --repo-root /path/to/your/repo \
+  --repository your-org/your-repo \
+  --branch main \
+  --actor you \
+  --token "$GH_TOKEN"
+```
 
 ## FAQ
 
----
+**What happens when no tags exist yet?**
+ReleaseGen treats the repository as starting at `v0.0.0` and creates the first tag from the entries under `## [Unreleased]`.
 
-### Table of Contents
+**What if there are no changes under `## [Unreleased]`?**
+No release is created. ReleaseGen only acts when it finds valid entries to promote.
 
-1. [What happens when no tags exist yet?](#what-happens-when-no-tags-exist-yet)
-2. [What if there are no changes in the CHANGELOG.md?](#what-if-there-are-no-changes-in-the-changelogmd)
-3. [How does ReleaseGen determine which version to increment?](#how-does-releasegen-determine-which-version-to-increment)
-4. [Will a major version bump automatically update my go.mod in a Golang project?](#will-a-major-version-bump-automatically-update-my-gomod-in-a-golang-project)
-5. [Can I exclude certain directories from release generation?](#can-i-exclude-certain-directories-from-release-generation)
-6. [What if there are multiple CHANGELOG.md files in different directories?](#what-if-there-are-multiple-changelogmd-files-in-different-directories)
-7. [Why does the release tag include the directory path in a monorepo?](#why-does-the-release-tag-include-the-directory-path-in-a-monorepo)
-8. [Can I manually trigger a release from a specific branch?](#can-i-manually-trigger-a-release-from-a-specific-branch)
-9. [What if I want to advance the version to a specific number?](#what-if-i-want-to-advance-the-version-to-a-specific-number)
-10. [What if an error occurs during the release process?](#what-if-an-error-occurs-during-the-release-process)
-11. [Can I customize the versioning logic?](#can-i-customize-the-versioning-logic)
-12. [How can I contribute to ReleaseGen?](#how-can-i-contribute-to-releasegen)
+**Will a major bump update my `go.mod` for me?**
+No. If a Go major version requires a module path change, you must update `go.mod` yourself.
 
-### What happens when no tags exist yet?
+**Can I exclude certain directories?**
+Yes — set `EXCLUDE_DIRS` (or `--exclude-dirs`) to the directories you want to skip.
 
-`ReleaseGen` treats the repository as though it started at v0.0.0. It will create the first tag according to the changes found under ## [Unreleased].
+**Why does a monorepo tag include the directory path?**
+Prefixing tags (e.g. `services/api/v1.2.3`) keeps releases organized and prevents collisions across modules.
 
-### What if there are no changes in the CHANGELOG.md?
+**Can I trigger a release from a specific branch?**
+Yes — use the `workflow_dispatch` trigger shown in the [workflow example](#workflow-example) and pick the branch.
 
-No new release is created. `ReleaseGen` only processes a release if it finds valid entries under ## [Unreleased].
+**Can I advance to a specific version?**
+Yes — set `MANUAL_VERSION` (or `--manual-version`, or the `version` workflow input). The value must be valid semver or the run exits with code `1`.
 
-### How does ReleaseGen determine which version to increment?
+**Can I customize the versioning logic?**
+Yes — beyond the standard Keep a Changelog headings, define your own with [custom change types](#custom-change-types).
 
-`ReleaseGen` scans each `CHANGELOG.md` under the ## [Unreleased] section and looks for specific keywords or headings (e.g., BREAKING CHANGE) to decide whether to bump the major, minor, or patch version.
+## Contributing
 
-### Will a major version bump automatically update my go.mod in a Golang project?
-
-No. You must update your go.mod file manually if you wish to reflect the new major version.
-
-### Can I exclude certain directories from release generation?
-
-Yes. Set the `EXCLUDE_DIRS` environment variable (in YAML, as shown above) to a list of directories you want to skip.
-
-### What if there are multiple CHANGELOG.md files in different directories?
-
-`ReleaseGen` will independently process each file. Each directory’s changes result in its own release tag (e.g., `worker/vX.Y.Z`).
-
-### Why does the release tag include the directory path in a monorepo?
-
-Prefixing tags (e.g., `services/api/v1.2.3`) keeps releases organized and prevents collisions in complex repos. A flat naming option may be considered in the future.
-
-### Can I manually trigger a release from a specific branch?
-
-Yes. You can use the workflow_dispatch event in GitHub Actions to specify the branch (see above workflow example). `ReleaseGen` will then create a release based on that branch’s `CHANGELOG.md`.
-
-### What if I want to advance the version to a specific number?
-
-Use the `MANUAL_VERSION` env var (or `--manual-version` flag, or the
-`version` input on the manual workflow dispatch) to force a specific
-semantic version. `REASON` / `--reason` is appended to the changelog footer
-to record why the manual bump was needed. The value must be a valid semver
-string; releasegen rejects anything else with exit code 1.
-
-### What if an error occurs during the release process?
-
-The process exits non-zero, the failure is logged with a `::error::`
-GitHub Actions marker, and no further modules are released. The exit code
-tells you which layer failed:
-
-| Code | Meaning                                     |
-| ---- | ------------------------------------------- |
-| 0    | Success or "nothing to release"             |
-| 1    | Configuration error (missing/invalid input) |
-| 2    | Changelog validation error (malformed `[Unreleased]`, unknown change type, incomplete `BREAKING CHANGE`) |
-| 3    | Git error (push, tag, commit, etc.)         |
-| 4    | GitHub API error (release creation)         |
-| 10   | Internal error (bug; please file an issue)  |
-
-If the run wrote any tags or releases before failing, those are not rolled
-back — fix the failing module, push a new commit, and rerun.
-
-### Can I customize the versioning logic?
-
-By default, `ReleaseGen` follows the Keep a Changelog headings and SemVer rules. You can define additional headings and the bump they trigger via the `CUSTOM_CHANGE_TYPES` environment variable (or the `--custom-change-types` flag) using newline-separated `<heading>:<bump>` pairs, where `<bump>` is `major`, `minor`, or `patch`. For example, to make a `### Documentation` section trigger a minor release:
-
-```yaml
-CUSTOM_CHANGE_TYPES: |
-  Documentation:minor
-```
-
-See the [Workflow Example](#workflow-example) for how to set this in a GitHub Actions workflow.
-
-### How can I contribute to ReleaseGen?
-
-We welcome bug reports, feature requests, and pull requests. Feel free to open an issue or submit a PR on our repository.
+Bug reports, feature requests, and pull requests are welcome. Please open an issue or submit a PR.
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+ReleaseGen is licensed under the MIT License. See [`LICENSE.md`](LICENSE.md) for details.

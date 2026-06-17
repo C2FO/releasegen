@@ -250,7 +250,7 @@ func (r *Runner) fail(res ModuleResult, err error) (ModuleResult, error) {
 // isSelfRelease reports whether the named module is the releasegen module
 // inside the configured self-release repository.
 func (r *Runner) isSelfRelease(module string) bool {
-	if r.cfg.SelfReleaseModule == "" || r.cfg.SelfReleaseRepo == "" {
+	if r.cfg.SelfReleaseRepo == "" {
 		return false
 	}
 	return module == r.cfg.SelfReleaseModule &&
