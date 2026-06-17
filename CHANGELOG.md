@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [[v1.0.1](https://github.com/C2FO/releasegen/releases/tag/v1.0.1)] - 2026-06-17
 ### Fixed
 - Added a step that computes a lowercased image name once using bash parameter expansion
 
