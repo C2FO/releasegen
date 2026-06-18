@@ -157,6 +157,122 @@ func (s *ValidateTestSuite) TestBatchesMultipleErrors() {
 	s.Contains(err.Error(), "worker/CHANGELOG.md")
 }
 
+// neutralEnv unsets every env var FromEnv looks at so a test runs with a
+// known-empty baseline regardless of the developer's shell. The
+// t.Setenv-based form auto-restores at test teardown.
+func (s *ValidateTestSuite) neutralEnv() {
+	for _, k := range []string{
+		"GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_ACTOR", "GITHUB_REF_NAME",
+		"GITHUB_BASE_REF",
+		"MANUAL_VERSION", "REASON",
+		"EXCLUDE_DIRS", "CUSTOM_CHANGE_TYPES",
+		"DEBUG", "REPO_ROOT", "SUMMARY_FILE",
+		"RELEASEGEN_SELF_MODULE", "RELEASEGEN_SELF_REPO",
+		"RELEASEGEN_REQUIRE_CHANGELOG_ENTRY", "RELEASEGEN_BASE_REF",
+	} {
+		s.T().Setenv(k, "")
+	}
+}
+
+func (s *ValidateTestSuite) TestBuildValidateConfig_AppliesFlagsOverEnv() {
+	s.neutralEnv()
+	s.T().Setenv("RELEASEGEN_REQUIRE_CHANGELOG_ENTRY", "true")
+	s.T().Setenv("RELEASEGEN_BASE_REF", "env-base-ref")
+
+	cmd := newValidateCmd()
+	// Simulate flags being passed: we need cmd.Flags().Changed("...") to
+	// return true, which only happens via Parse on real args.
+	s.Require().NoError(cmd.ParseFlags([]string{
+		"--repo-root", s.tmpDir,
+		"--require-changelog-entry=false",
+		"--base-ref", "flag-base-ref",
+		"--exclude-dirs", "vendor/",
+		"--custom-change-types", "Documentation:patch",
+		"--debug",
+	}))
+
+	cfg, err := buildValidateConfig(cmd, validateFlagValues{
+		repoRoot:              s.tmpDir,
+		excludeDirs:           "vendor/",
+		customTypes:           "Documentation:patch",
+		debug:                 true,
+		requireChangelogEntry: false,
+		baseRef:               "flag-base-ref",
+	})
+	s.Require().NoError(err)
+	s.Equal(s.tmpDir, cfg.RepoRoot)
+	s.False(cfg.RequireChangelogEntry, "explicit --require-changelog-entry=false must beat env=true")
+	s.Equal("flag-base-ref", cfg.BaseRef, "--base-ref must beat RELEASEGEN_BASE_REF")
+	s.Equal([]string{"vendor/"}, cfg.ExcludeDirs)
+	s.True(cfg.Debug)
+	s.Contains(cfg.CustomTypes, "documentation")
+}
+
+func (s *ValidateTestSuite) TestBuildValidateConfig_BadCustomTypesIsConfigErr() {
+	s.neutralEnv()
+	cmd := newValidateCmd()
+	_, err := buildValidateConfig(cmd, validateFlagValues{
+		repoRoot:    s.tmpDir,
+		customTypes: "not-a-pair",
+	})
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitConfigErr, cliErr.code)
+	s.Contains(err.Error(), "custom-change-types")
+}
+
+func (s *ValidateTestSuite) TestBuildValidateConfig_BadConfigFileIsConfigErr() {
+	s.neutralEnv()
+	// Drop a malformed YAML so LoadFile / yaml.Decoder returns an error,
+	// exercising the file-load error branch of buildValidateConfig.
+	bad := filepath.Join(s.tmpDir, ".releasegen.yaml")
+	s.Require().NoError(os.WriteFile(bad, []byte("custom_change_types: [oops\n"), 0o600))
+	cmd := newValidateCmd()
+	_, err := buildValidateConfig(cmd, validateFlagValues{repoRoot: s.tmpDir})
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitConfigErr, cliErr.code)
+}
+
+func (s *ValidateTestSuite) TestValidateCmd_EndToEndAgainstRealRepo() {
+	// Drive the actual cobra subcommand against a real git repo so the
+	// RunE body (signal context, logging, vcs.Open, AllChangelogPaths,
+	// validateAll) is exercised end to end.
+	s.neutralEnv()
+	f := s.newRequireEntryFixture()
+	// Add a well-formed [Unreleased] entry so even with the entry check
+	// off, validation is clean.
+	f.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n### Added\n- thing\n")
+	f.commit("with entry")
+
+	cmd := newValidateCmd()
+	cmd.SetArgs([]string{"--repo-root", f.dir})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	s.Require().NoError(cmd.Execute())
+}
+
+func (s *ValidateTestSuite) TestValidateCmd_EndToEnd_ReportsFailure() {
+	s.neutralEnv()
+	f := s.newRequireEntryFixture()
+	// HEAD has a malformed [Unreleased] section so RunE must surface a
+	// cliError with exit code 2.
+	f.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n### Whimsy\n- bogus\n")
+	f.commit("bad heading")
+
+	cmd := newValidateCmd()
+	cmd.SetArgs([]string{"--repo-root", f.dir})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitChangelogErr, cliErr.code)
+}
+
 func (s *ValidateTestSuite) TestNewValidateCmdRegistered() {
 	root := newRootCmd()
 	var found *cobra.Command
@@ -288,6 +404,53 @@ func (s *ValidateTestSuite) TestRequireChangelogEntry_RootCatchesUnclaimedFiles(
 	s.Require().Error(err)
 	s.Contains(err.Error(), "CHANGELOG.md")
 	s.NotContains(err.Error(), "svc/CHANGELOG.md")
+}
+
+func (s *ValidateTestSuite) TestRequireChangelogEntry_BadBaseRefIsVCSError() {
+	f := s.newRequireEntryFixture()
+	f.write("svc/foo.go", "package svc\n// updated\n")
+	f.commit("any code change")
+
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "no-such-revision",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	err := validateAll(context.Background(), cfg, paths, repo, s.log)
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitVCSErr, cliErr.code)
+	s.Contains(err.Error(), "no-such-revision")
+}
+
+func (s *ValidateTestSuite) TestRequireChangelogEntry_EmptyBaseRefUsesDefault() {
+	// With BaseRef left blank, validateAll calls config.DefaultBaseRef()
+	// which resolves to "origin/main" outside of CI. The temp repo has no
+	// "origin" remote, so the resolution must fail with a VCS error — the
+	// important behavior here is that the default-base-ref fallback line
+	// was exercised.
+	f := s.newRequireEntryFixture()
+	f.write("svc/foo.go", "package svc\n// updated\n")
+	f.commit("any code change")
+
+	// Make sure no ambient GITHUB_BASE_REF leaks in.
+	s.T().Setenv("GITHUB_BASE_REF", "")
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	err := validateAll(context.Background(), cfg, paths, repo, s.log)
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitVCSErr, cliErr.code)
+	s.Contains(err.Error(), "origin/main")
 }
 
 func (s *ValidateTestSuite) TestRequireChangelogEntry_DisabledByDefault() {
