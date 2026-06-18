@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [[v1.1.1](https://github.com/C2FO/releasegen/releases/tag/v1.1.1)] - 2026-06-18
 ### Documentation
 - Documented the classic-branch-protection setup gap in the GitHub App Setup
   section: the app must be added to both the "Allow specified actors to bypass
