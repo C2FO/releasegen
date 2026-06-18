@@ -14,6 +14,21 @@ import (
 // be opted into deliberately.
 const breakingMarker = "BREAKING CHANGE"
 
+// fencedCodeRE matches a triple-backtick fenced code block, including any
+// info string after the opening fence and the trailing newline. We strip
+// these from the unreleased section before classification so a documented
+// example like ```\n### Changed\n``` cannot masquerade as a real heading.
+//
+//nolint:gochecknoglobals // compiled once, intentionally package-scoped.
+var fencedCodeRE = regexp.MustCompile("(?ms)^```[^\\n]*\\n.*?\\n```\\s*$")
+
+// stripFencedCode removes any fenced code blocks from s. Heading detection
+// runs against the result so prose-at-column-0 inside a fence never becomes
+// a phantom `### Changed` or `### Added` heading.
+func stripFencedCode(s string) string {
+	return fencedCodeRE.ReplaceAllString(s, "")
+}
+
 var (
 	breakingHeadingRE = regexp.MustCompile(heading3Prefix + `(?:Change|Remove)[sd]?`)
 	addedRE           = regexp.MustCompile(heading3Prefix + `Add(?:s|ed)?`)
@@ -42,6 +57,11 @@ func Classify(unreleased string, custom map[string]config.BumpType) (config.Bump
 	if strings.TrimSpace(unreleased) == "" {
 		return config.BumpNone, ErrNoChangesDetected
 	}
+	// Strip fenced code blocks so documented examples (```\n### Changed\n```)
+	// can't masquerade as real headings. The anchored heading3Prefix already
+	// handles inline-code cases like `### Changed` because those never sit
+	// at column 0.
+	unreleased = stripFencedCode(unreleased)
 
 	bump := classifyCustom(unreleased, custom)
 
@@ -132,6 +152,9 @@ func ValidateSection(unreleased string, custom map[string]config.BumpType) []err
 	if strings.TrimSpace(unreleased) == "" {
 		return []error{ErrNoChangesDetected}
 	}
+	// Same defense as Classify: strip fenced code blocks so example syntax
+	// inside docs cannot be reported as an unknown heading.
+	unreleased = stripFencedCode(unreleased)
 
 	headings := h3HeadingRE.FindAllStringSubmatch(unreleased, -1)
 	if len(headings) == 0 {

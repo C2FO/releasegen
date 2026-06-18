@@ -7,7 +7,15 @@ import (
 
 const (
 	heading2Prefix = `(?i)##\s*`
-	heading3Prefix = `(?i)###\s*`
+	// heading3Prefix matches a real `### ` markdown heading at the start of
+	// a line. The `(?m)` flag scopes `^` to line starts (not just the start
+	// of the whole string), and `\s*` keeps tolerance for stylistic
+	// variations like `###Heading` or `###   Heading`. Anchoring to a line
+	// start is critical: without it, prose that mentions `### Changed`
+	// inside an inline code span — exactly the kind of text this very
+	// changelog contains when documenting validation rules — would be
+	// mistaken for a heading and could trigger a spurious major bump.
+	heading3Prefix = `(?im)^###\s*`
 
 	// SemverPattern is a regex pattern that matches a semantic version string
 	// (per https://semver.org/spec/v2.0.0.html). Exposed for callers that need

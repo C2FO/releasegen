@@ -6,8 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-
-## [[v2.0.0](https://github.com/C2FO/releasegen/releases/tag/v2.0.0)] - 2026-06-18
 ### Added
 - New `releasegen validate` subcommand. Parses every `## [Unreleased]` section
   in the repository and reports **every** malformed heading it finds — both
@@ -32,10 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new lines. Modules are scoped by where `CHANGELOG.md` lives, with the
   root changelog catching every file not claimed by a submodule changelog.
   The base ref is configurable via `--base-ref` / `RELEASEGEN_BASE_REF` /
-  `validate.base_ref` and defaults to `origin/` on GitHub
+  `validate.base_ref` and defaults to `origin/$GITHUB_BASE_REF` on GitHub
   Actions pull-request runs, else `origin/main`. Subsumes the prior
   external `ensure_changelog` workflow, which has been removed from this
   repository in favor of the validate-driven check.
+
+### Fixed
+- Classifier no longer treats `###` heading references in prose as real
+  markdown headings. The internal `heading3Prefix` regex is now anchored
+  to the start of a line (multiline mode), and fenced code blocks are
+  stripped from `[Unreleased]` bodies before classification. Before this
+  fix, an `### Added` entry whose body documented `### Changed` / `### Removed`
+  in an inline code span — and happened to mention `BREAKING CHANGE` while
+  describing the marker rule — would be misclassified as a major bump.
+  `ValidateSection` benefits from the same protection.
 
 ## [[v1.1.1](https://github.com/C2FO/releasegen/releases/tag/v1.1.1)] - 2026-06-18
 ### Documentation

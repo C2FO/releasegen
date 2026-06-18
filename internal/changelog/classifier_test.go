@@ -115,6 +115,36 @@ func (s *ClassifierTestSuite) TestClassify() {
 			wantErr:     true,
 			wantErrType: changelog.ErrUnrecognizedChangeType,
 		},
+		{
+			// Regression: prose mentioning `### Changed` / `BREAKING CHANGE`
+			// inside an inline code span MUST NOT trigger a major bump. This
+			// is the exact shape of text that wrongly bumped v1.1.1 to v2.0.0
+			// before heading3Prefix gained its line anchor.
+			name: "Inline-code heading reference in body is not a heading",
+			section: "### Added\n" +
+				"- New validate subcommand documents that `### Changed` and `### Removed`\n" +
+				"  must include the `BREAKING CHANGE` marker.\n",
+			wantBump: config.BumpMinor,
+		},
+		{
+			// A documented example inside a fenced code block must also be
+			// ignored even though the inner lines start at column 0.
+			name: "Fenced code block with heading-like content is ignored",
+			section: "### Added\n" +
+				"- Example of a bad changelog:\n" +
+				"```\n" +
+				"### Changed\n" +
+				"- oops, no marker\n" +
+				"```\n",
+			wantBump: config.BumpMinor,
+		},
+		{
+			// An H4 heading should not register as an H3. Defense in depth.
+			name:        "H4 ####Changed is not an H3 heading",
+			section:     "#### Changed\n- subheading prose only",
+			wantErr:     true,
+			wantErrType: changelog.ErrUnrecognizedChangeType,
+		},
 	}
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
@@ -198,6 +228,23 @@ func (s *ClassifierTestSuite) TestValidateSection() {
 			wantNumErrs:  1,
 			wantContain:  []string{"no ### heading"},
 			wantSentinel: []error{changelog.ErrUnrecognizedChangeType},
+		},
+		{
+			// Regression: inline-code heading references must not be reported
+			// as unknown headings. Pair with the Classify regression above.
+			name: "inline-code heading reference is ignored by validation",
+			section: "### Added\n" +
+				"- Prose that mentions `### Whimsy` only as documentation.\n",
+			wantNumErrs: 0,
+		},
+		{
+			name: "fenced-block heading-like content is ignored by validation",
+			section: "### Added\n" +
+				"- See bad example below:\n" +
+				"```\n" +
+				"### Bogus\n" +
+				"```\n",
+			wantNumErrs: 0,
 		},
 	}
 	for _, tt := range tests {
