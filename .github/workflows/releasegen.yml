@@ -56,8 +56,9 @@ jobs:
           GITHUB_REF_NAME: ${{ github.event.inputs.branch || github.ref_name }}
           MANUAL_VERSION: ${{ github.event.inputs.version || '' }}
           REASON: ${{ github.event.inputs.reason || '' }}
-          CUSTOM_CHANGE_TYPES: |
-            Documentation:patch
+          # Repo-shape options (custom_change_types, exclude_dirs, ...) live
+          # in .releasegen.yaml at the repo root so this workflow does not
+          # have to keep them in sync with the validate workflow.
         run: |
           go build -trimpath -ldflags "-s -w" -o release-gen ./cmd/releasegen
           # releasegen prints the self-release version on stdout (and only

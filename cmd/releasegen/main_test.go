@@ -115,3 +115,53 @@ func (s *CLITestSuite) TestNewRootCmd_VersionShortCircuits() {
 	cmd.SetArgs([]string{"--version"})
 	s.Require().NoError(cmd.Execute())
 }
+
+// TestNewRootCmd_FailsWithoutGitHubContext drives the actual root RunE
+// (not the validate subcommand) past FromEnv -> LoadFile -> ApplyFile ->
+// applyFlagOverrides and into ValidateForRelease, which must return a
+// config error because no GitHub credentials are present. Exercising this
+// path keeps main.go coverage honest without needing a full GitHub fixture.
+func (s *CLITestSuite) TestNewRootCmd_FailsWithoutGitHubContext() {
+	for _, k := range []string{
+		"GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_ACTOR", "GITHUB_REF_NAME",
+		"GITHUB_BASE_REF",
+		"MANUAL_VERSION", "REASON",
+		"EXCLUDE_DIRS", "CUSTOM_CHANGE_TYPES",
+		"DEBUG", "REPO_ROOT", "SUMMARY_FILE",
+		"RELEASEGEN_SELF_MODULE", "RELEASEGEN_SELF_REPO",
+		"RELEASEGEN_REQUIRE_CHANGELOG_ENTRY", "RELEASEGEN_BASE_REF",
+	} {
+		s.T().Setenv(k, "")
+	}
+	// Use a tmpdir so LoadFile finds no .releasegen.yaml in this run.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo-root", s.T().TempDir()})
+	err := cmd.Execute()
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitConfigErr, cliErr.code)
+	// Confirm the specific GitHub-context error surfaced (rather than,
+	// say, a yaml parse failure).
+	s.Contains(err.Error(), "GITHUB_TOKEN")
+}
+
+func (s *CLITestSuite) TestNewRootCmd_BadCustomTypesFlagFailsFast() {
+	for _, k := range []string{
+		"GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_ACTOR", "GITHUB_REF_NAME",
+		"CUSTOM_CHANGE_TYPES",
+	} {
+		s.T().Setenv(k, "")
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"--repo-root", s.T().TempDir(),
+		"--custom-change-types", "not-a-pair",
+	})
+	err := cmd.Execute()
+	s.Require().Error(err)
+	var cliErr cliError
+	s.Require().ErrorAs(err, &cliErr)
+	s.Equal(exitConfigErr, cliErr.code)
+	s.Contains(err.Error(), "custom-change-types")
+}

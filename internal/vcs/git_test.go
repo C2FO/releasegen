@@ -119,6 +119,60 @@ func (s *VCSTestSuite) TestIntegration() {
 	s.True(first)
 }
 
+func (s *VCSTestSuite) TestChangedFilesAndFileAtRef() {
+	dir := s.T().TempDir()
+	repo, err := git.PlainInit(dir, false)
+	s.Require().NoError(err)
+	wt, err := repo.Worktree()
+	s.Require().NoError(err)
+	sig := &object.Signature{Name: "tester", Email: "t@example.com", When: time.Now()}
+
+	writeFile := func(rel, body string) {
+		s.Require().NoError(os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o750))
+		s.Require().NoError(os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600))
+		_, err := wt.Add(rel)
+		s.Require().NoError(err)
+	}
+
+	// Base: one source file, one changelog.
+	writeFile("main.go", "package x\n")
+	writeFile("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n")
+	baseHash, err := wt.Commit("base", &git.CommitOptions{Author: sig})
+	s.Require().NoError(err)
+	// Tag the base commit so we have a stable revspec to diff against.
+	_, err = repo.CreateTag("base-tag", baseHash, &git.CreateTagOptions{Tagger: sig, Message: "base"})
+	s.Require().NoError(err)
+
+	// HEAD: modify the source file and add a new file under a submodule.
+	writeFile("main.go", "package x\n// changed\n")
+	writeFile("submodule/foo.go", "package submodule\n")
+	_, err = wt.Commit("work", &git.CommitOptions{Author: sig})
+	s.Require().NoError(err)
+
+	g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
+	s.Require().NoError(err)
+	ctx := context.Background()
+
+	changed, err := g.ChangedFiles(ctx, "base-tag")
+	s.Require().NoError(err)
+	s.ElementsMatch([]string{"main.go", "submodule/foo.go"}, changed)
+
+	// FileAtRef returns the base version of main.go (no "// changed" line).
+	atBase, err := g.FileAtRef(ctx, "base-tag", "main.go")
+	s.Require().NoError(err)
+	s.Equal("package x\n", atBase)
+
+	// A file that didn't exist at base resolves to empty, not an error.
+	atBaseNew, err := g.FileAtRef(ctx, "base-tag", "submodule/foo.go")
+	s.Require().NoError(err)
+	s.Empty(atBaseNew)
+
+	// An unresolvable ref produces an ErrVCS-wrapped error.
+	_, err = g.ChangedFiles(ctx, "no-such-ref")
+	s.Require().Error(err)
+	s.ErrorIs(err, vcs.ErrVCS)
+}
+
 // TestCommitTagAndPush_PushedToBareRemote exercises the full
 // commit -> tag -> push pipeline against a local bare repository acting
 // as origin. It also verifies that errors carry the vcs.ErrVCS sentinel.
