@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Documented the classic-branch-protection setup gap in the GitHub App Setup
+  section: the app must be added to both the "Allow specified actors to bypass
+  required pull requests" list and the "Restrict who can push" allowlist, or
+  the push fails with `protected branch hook declined`. Rulesets only need a
+  single bypass entry.
+
 ## [[v1.1.0](https://github.com/C2FO/releasegen/releases/tag/v1.1.0)] - 2026-06-18
 ### Security
 - Update dependenices to resoolve dependabot security alerts

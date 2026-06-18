@@ -193,7 +193,15 @@ If your release branch is protected (required reviews, status checks, etc.), the
 4. **Add repository secrets** (Settings → Secrets and variables → Actions):
    - `RELEASEGEN_APP_ID` = your App ID
    - `RELEASEGEN_APP_PRIVATE_KEY` = contents of the `.pem` file
-5. **Allow the app to bypass branch protection** (Settings → Rules → your `main` ruleset → **Bypass list** → add the app).
+5. **Allow the app to bypass branch protection.** How you do this depends on which protection style your release branch uses:
+   - **Rulesets (recommended):** Settings → Rules → your release-branch ruleset → **Bypass list** → add the app. One list, done.
+   - **Classic branch protection:** Settings → Branches → edit the rule for your release branch and update **two** separate lists:
+     1. Under **Require a pull request before merging** → check **Allow specified actors to bypass required pull requests** → add the app.
+     2. Under **Restrict who can push to matching branches** → add the app to the push allowlist.
+
+   > **Heads up (classic protection):** the push allowlist alone is **not** enough. GitHub's docs are explicit: "People, teams, and apps that have permission to push to a protected branch will still need to create a pull request when pull requests are required." The push will fail with `protected branch hook declined` until the app is also in the pull-request bypass list. If you're on classic protection and want a single place to manage this, consider migrating the branch to a Ruleset.
+
+   Repeat for every protected branch the workflow releases from (e.g. `main`, `v6`, etc.).
 
 ### Workflow Example
 
