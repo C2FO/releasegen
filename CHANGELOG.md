@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   external `ensure_changelog` workflow, which has been removed from this
   repository in favor of the validate-driven check.
 
+### Fixed
+- Classifier no longer treats `###` heading references in prose as real
+  markdown headings. The internal `heading3Prefix` regex is now anchored
+  to the start of a line (multiline mode), and fenced code blocks are
+  stripped from `[Unreleased]` bodies before classification. Before this
+  fix, an `### Added` entry whose body documented `### Changed` / `### Removed`
+  in an inline code span — and happened to mention `BREAKING CHANGE` while
+  describing the marker rule — would be misclassified as a major bump.
+  `ValidateSection` benefits from the same protection.
+
 ## [[v1.1.1](https://github.com/C2FO/releasegen/releases/tag/v1.1.1)] - 2026-06-18
 ### Documentation
 - Documented the classic-branch-protection setup gap in the GitHub App Setup
