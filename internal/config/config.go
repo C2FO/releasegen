@@ -46,6 +46,21 @@ type Config struct {
 	// the repository being released; set SelfReleaseRepo to "" to disable.
 	SelfReleaseModule string
 	SelfReleaseRepo   string
+
+	// RequireChangelogEntry, when true, makes `releasegen validate` enforce
+	// that any module whose non-CHANGELOG files changed (vs BaseRef) also
+	// gained new content under its `## [Unreleased]` section. This folds
+	// the historical "ensure_changelog" pre-merge guard into releasegen so
+	// developers can't merge code without a changelog entry. Default false
+	// so the syntactic validation can be adopted independently.
+	RequireChangelogEntry bool
+
+	// BaseRef is the git revision the changelog-entry check diffs against.
+	// Any revspec go-git can resolve is accepted (branch, tag, remote
+	// tracking ref like "origin/main", raw hash). Empty falls back to
+	// "origin/$GITHUB_BASE_REF" when running under GitHub Actions PR
+	// events, else "origin/main".
+	BaseRef string
 }
 
 // Owner returns the "owner" portion of OwnerRepo.
@@ -60,10 +75,34 @@ func (c *Config) Repo() string {
 	return repo
 }
 
-// Validate checks that required fields are present and well-formed.
+// Validate checks fields needed regardless of which command is running:
+// repo root must be set and custom change types must be well-formed.
+// Commands that need additional context (release vs. validate) should call
+// the path-specific helpers below in addition to this method.
 func (c *Config) Validate() error {
 	var errs []error
+	if c.RepoRoot == "" {
+		errs = append(errs, errors.New("repo root is required"))
+	}
+	for heading, bump := range c.CustomTypes {
+		if heading == "" {
+			errs = append(errs, errors.New("custom change type has empty heading"))
+		}
+		if bump == BumpNone {
+			errs = append(errs, fmt.Errorf("custom change type %q has invalid bump", heading))
+		}
+	}
+	return errors.Join(errs...)
+}
 
+// ValidateForRelease enforces the additional fields required to perform an
+// actual release (commit/tag/push and GitHub Release publication). Callers
+// should invoke Validate() first so common errors aren't masked.
+func (c *Config) ValidateForRelease() error {
+	var errs []error
+	if err := c.Validate(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.Token == "" {
 		errs = append(errs, errors.New("GITHUB_TOKEN is required"))
 	}
@@ -82,17 +121,6 @@ func (c *Config) Validate() error {
 		if _, err := semver.NewVersion(strings.TrimPrefix(c.ManualVersion, "v")); err != nil {
 			errs = append(errs, fmt.Errorf("MANUAL_VERSION %q is not a valid semver: %w", c.ManualVersion, err))
 		}
-	}
-	for heading, bump := range c.CustomTypes {
-		if heading == "" {
-			errs = append(errs, errors.New("custom change type has empty heading"))
-		}
-		if bump == BumpNone {
-			errs = append(errs, fmt.Errorf("custom change type %q has invalid bump", heading))
-		}
-	}
-	if c.RepoRoot == "" {
-		errs = append(errs, errors.New("repo root is required"))
 	}
 	return errors.Join(errs...)
 }
@@ -120,7 +148,24 @@ func FromEnv() (*Config, error) {
 		// the root module (module name "") is the self-release module.
 		SelfReleaseModule: os.Getenv("RELEASEGEN_SELF_MODULE"),
 		SelfReleaseRepo:   envOr("RELEASEGEN_SELF_REPO", "c2fo/releasegen"),
+		// RELEASEGEN_REQUIRE_CHANGELOG_ENTRY accepts the usual truthy
+		// strings; anything else (including unset) leaves the field at
+		// its zero value so the config file can supply the answer.
+		RequireChangelogEntry: strings.EqualFold(os.Getenv("RELEASEGEN_REQUIRE_CHANGELOG_ENTRY"), "true"),
+		BaseRef:               os.Getenv("RELEASEGEN_BASE_REF"),
 	}, nil
+}
+
+// DefaultBaseRef returns the effective base ref for the changelog-entry
+// check after taking ambient CI environment into account. Callers should
+// only invoke this when cfg.BaseRef is still empty after flag/env/file
+// resolution; the result is "origin/<GITHUB_BASE_REF>" if running under a
+// GitHub Actions pull_request event, otherwise "origin/main".
+func DefaultBaseRef() string {
+	if ghBase := os.Getenv("GITHUB_BASE_REF"); ghBase != "" {
+		return "origin/" + ghBase
+	}
+	return "origin/main"
 }
 
 // envOr returns the value of the named env var, or fallback when unset.

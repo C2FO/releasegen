@@ -106,11 +106,13 @@ linters:
         - -ST1022
         - all
     tagliatelle:
-      # The JSON run-summary (see internal/runner) is a stable, snake_case
-      # output contract consumed by downstream workflow steps.
+      # The JSON run-summary (see internal/runner) and the `.releasegen.yaml`
+      # user config (see internal/config) are stable, snake_case output and
+      # input contracts consumed by users and downstream workflow steps.
       case:
         rules:
           json: snake
+          yaml: snake
     unparam:
       check-exported: false
   exclusions:

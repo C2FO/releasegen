@@ -77,6 +77,19 @@ func newRootCmd() *cobra.Command {
 				return cliError{code: exitConfigErr, err: err}
 			}
 
+			// Honor the --repo-root flag (if any) before searching for the
+			// config file so the lookup happens in the user-specified tree.
+			if repoRoot != "" {
+				cfg.RepoRoot = repoRoot
+			}
+			fc, _, err := config.LoadFile(cfg.RepoRoot)
+			if err != nil {
+				return cliError{code: exitConfigErr, err: err}
+			}
+			if err := config.ApplyFile(cfg, fc); err != nil {
+				return cliError{code: exitConfigErr, err: err}
+			}
+
 			if err := applyFlagOverrides(cfg, flagOverrides{
 				repoRoot:      repoRoot,
 				dryRun:        dryRun,
@@ -94,7 +107,7 @@ func newRootCmd() *cobra.Command {
 				return cliError{code: exitConfigErr, err: err}
 			}
 
-			if err := cfg.Validate(); err != nil {
+			if err := cfg.ValidateForRelease(); err != nil {
 				return cliError{code: exitConfigErr, err: err}
 			}
 
@@ -148,6 +161,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "release branch (overrides GITHUB_REF_NAME)")
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token (overrides GITHUB_TOKEN)")
 
+	cmd.AddCommand(newValidateCmd())
 	return cmd
 }
 

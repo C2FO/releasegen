@@ -85,7 +85,27 @@ func (s *ConfigTestSuite) TestParseCustomTypesError() {
 	s.Require().Error(err)
 }
 
-func (s *ConfigTestSuite) TestValidate() {
+func (s *ConfigTestSuite) TestValidate_BaselineOnly() {
+	// Validate() is intentionally relaxed: it does not require GitHub
+	// credentials. Those are checked by ValidateForRelease.
+	good := &config.Config{RepoRoot: "."}
+	s.Require().NoError(good.Validate())
+
+	cases := map[string]func(c *config.Config){
+		"missing repo root":    func(c *config.Config) { c.RepoRoot = "" },
+		"empty custom heading": func(c *config.Config) { c.CustomTypes = map[string]config.BumpType{"": config.BumpPatch} },
+		"invalid custom bump":  func(c *config.Config) { c.CustomTypes = map[string]config.BumpType{"docs": config.BumpNone} },
+	}
+	for name, mutate := range cases {
+		s.Run(name, func() {
+			c := *good
+			mutate(&c)
+			s.Require().Error(c.Validate())
+		})
+	}
+}
+
+func (s *ConfigTestSuite) TestValidateForRelease() {
 	good := &config.Config{
 		Token:     "x",
 		OwnerRepo: "owner/repo",
@@ -93,7 +113,7 @@ func (s *ConfigTestSuite) TestValidate() {
 		Branch:    "main",
 		RepoRoot:  ".",
 	}
-	s.Require().NoError(good.Validate())
+	s.Require().NoError(good.ValidateForRelease())
 
 	cases := map[string]func(c *config.Config){
 		"missing token":      func(c *config.Config) { c.Token = "" },
@@ -108,7 +128,7 @@ func (s *ConfigTestSuite) TestValidate() {
 		s.Run(name, func() {
 			c := *good
 			mutate(&c)
-			s.Require().Error(c.Validate())
+			s.Require().Error(c.ValidateForRelease())
 		})
 	}
 }

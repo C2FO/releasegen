@@ -16,6 +16,10 @@ tasks:
     default_selected: true
     command: env -u GIT_INDEX_FILE -u GIT_INDEX_LOCK golangci-lint run --new-from-rev HEAD --max-same-issues 0 ./...
     per_module: true
-  - name: Check for changes in CHANGELOG.md
+  - name: Validate CHANGELOG.md
     default_selected: true
-    command: /bin/bash {{.repo_root}}/.github/workflows/scripts/changelog.sh
+    # Dogfoods releasegen's own validate subcommand: parses every
+    # [Unreleased] section AND (per .releasegen.yaml's validate block)
+    # requires a new entry for any module whose non-CHANGELOG files
+    # changed vs origin/main. Replaces the legacy changelog.sh script.
+    command: go run {{.repo_root}}/cmd/releasegen validate --repo-root {{.repo_root}}

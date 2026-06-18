@@ -1,6 +1,8 @@
 package changelog_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -126,6 +128,100 @@ func (s *ClassifierTestSuite) TestClassify() {
 			}
 			s.Require().NoError(err)
 			s.Equal(tt.wantBump, got)
+		})
+	}
+}
+
+func (s *ClassifierTestSuite) TestValidateSection() {
+	tests := []struct {
+		name         string
+		section      string
+		custom       map[string]config.BumpType
+		wantNumErrs  int
+		wantContain  []string // substrings each present somewhere in the joined error list
+		wantSentinel []error
+	}{
+		{
+			name:         "empty section is not-a-change",
+			section:      "",
+			wantNumErrs:  1,
+			wantSentinel: []error{changelog.ErrNoChangesDetected},
+		},
+		{
+			name:        "valid standard headings, no problems",
+			section:     "### Added\n- thing\n### Fixed\n- bug",
+			wantNumErrs: 0,
+		},
+		{
+			name:         "changed without BREAKING CHANGE marker",
+			section:      "### Changed\n- thing",
+			wantNumErrs:  1,
+			wantSentinel: []error{changelog.ErrIncompleteBreaking},
+		},
+		{
+			name:         "removed without marker also fails breaking check",
+			section:      "### Removed\n- legacy API",
+			wantNumErrs:  1,
+			wantSentinel: []error{changelog.ErrIncompleteBreaking},
+		},
+		{
+			name:        "changed with marker is fine",
+			section:     "### Changed\n- **BREAKING CHANGE**: API behavior changed.",
+			wantNumErrs: 0,
+		},
+		{
+			name:         "unknown heading is flagged",
+			section:      "### Whimsy\n- something",
+			wantNumErrs:  1,
+			wantContain:  []string{"Whimsy"},
+			wantSentinel: []error{changelog.ErrUnrecognizedChangeType},
+		},
+		{
+			name:        "all problems reported in a single pass",
+			section:     "### Changed\n- thing\n### Whimsy\n- another\n### Bogus\n- third",
+			wantNumErrs: 3,
+			wantContain: []string{"Whimsy", "Bogus", "BREAKING CHANGE"},
+			wantSentinel: []error{
+				changelog.ErrUnrecognizedChangeType,
+				changelog.ErrIncompleteBreaking,
+			},
+		},
+		{
+			name:        "declared custom heading does not count as unknown",
+			section:     "### Documentation\n- explained the thing",
+			custom:      map[string]config.BumpType{"documentation": config.BumpPatch},
+			wantNumErrs: 0,
+		},
+		{
+			name:         "content but no heading at all",
+			section:      "- bare bullet, no heading\n- another",
+			wantNumErrs:  1,
+			wantContain:  []string{"no ### heading"},
+			wantSentinel: []error{changelog.ErrUnrecognizedChangeType},
+		},
+	}
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			got := changelog.ValidateSection(tt.section, tt.custom)
+			s.Require().Lenf(got, tt.wantNumErrs, "errors: %v", got)
+			parts := make([]string, 0, len(got))
+			for _, e := range got {
+				parts = append(parts, e.Error())
+			}
+			joined := strings.Join(parts, "\n")
+			for _, sub := range tt.wantContain {
+				s.Contains(joined, sub)
+			}
+			for _, sentinel := range tt.wantSentinel {
+				var matched bool
+				for _, e := range got {
+					if errors.Is(e, sentinel) {
+						matched = true
+						break
+					}
+				}
+				s.Truef(matched, "expected an error wrapping %v in %v", sentinel, got)
+			}
 		})
 	}
 }

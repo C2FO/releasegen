@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- New `releasegen validate` subcommand. Parses every `## [Unreleased]` section
+  in the repository and reports **every** malformed heading it finds — both
+  across files and within a single file — in a single batched report. Detects
+  `### Changed` / `### Removed` without the `BREAKING CHANGE` marker as well
+  as any heading not declared in `custom_change_types`, naming the offending
+  heading in each error. Needs no GitHub token, performs no I/O beyond reads,
+  and exits `0` on success / `2` on any validation failure — intended as a
+  required PR-time check before the release workflow.
+- New `.releasegen.yaml` (also `.releasegen.yml`) config file at the repo root.
+  Supports `custom_change_types`, `exclude_dirs`, a `validate:` block (see
+  below), and the advanced `self_release_module` / `self_release_repo`
+  overrides. Precedence is flags > env > file > built-in defaults; unknown
+  keys cause a configuration error so typos surface early. Both `validate`
+  and the existing release path read it, so repo-shape options no longer
+  have to be duplicated across workflows.
+- New optional `--require-changelog-entry` mode for `releasegen validate`
+  (also exposed as `validate.require_changelog_entry: true` in
+  `.releasegen.yaml` and `RELEASEGEN_REQUIRE_CHANGELOG_ENTRY=true` in the
+  environment). When enabled, validate fails any PR whose non-`CHANGELOG.md`
+  files changed vs the base ref but whose `[Unreleased]` section gained no
+  new lines. Modules are scoped by where `CHANGELOG.md` lives, with the
+  root changelog catching every file not claimed by a submodule changelog.
+  The base ref is configurable via `--base-ref` / `RELEASEGEN_BASE_REF` /
+  `validate.base_ref` and defaults to `origin/$GITHUB_BASE_REF` on GitHub
+  Actions pull-request runs, else `origin/main`. Subsumes the prior
+  external `ensure_changelog` workflow, which has been removed from this
+  repository in favor of the validate-driven check.
 
 ## [[v1.1.1](https://github.com/C2FO/releasegen/releases/tag/v1.1.1)] - 2026-06-18
 ### Documentation

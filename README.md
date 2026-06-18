@@ -22,6 +22,7 @@ That's the whole job — no plugins, no runtime, no DSL, and it never inspects y
 - [Writing Your `CHANGELOG.md`](#writing-your-changelogmd)
 - [GitHub Actions Integration](#github-actions-integration)
 - [Configuration](#configuration)
+  - [Configuration file (`.releasegen.yaml`)](#configuration-file-releasegenyaml)
 - [Building From Source](#building-from-source)
 - [FAQ](#faq)
 - [Contributing](#contributing)
@@ -61,7 +62,9 @@ ReleaseGen deliberately does **not** build artifacts, publish to package registr
 - **Atomic, fail-fast runs.** A failing module aborts the run rather than leaving you half-released.
 - **Structured exit codes.** Distinct codes for config, changelog, Git, and API failures so CI can branch on the failure class. See [Exit Codes](#exit-codes).
 - **Machine-readable summaries.** `--summary-file` writes a JSON summary of the run for downstream steps to consume instead of scraping logs.
-- **Config via flags or env.** Every environment variable has an equivalent CLI flag; flags take precedence over env, which takes precedence over built-in defaults.
+- **PR-time validation.** A `releasegen validate` subcommand parses every `## [Unreleased]` section and reports every malformed heading it finds — across files and within a single file — before the merge. Opt in to `--require-changelog-entry` and validate also enforces that any module whose source files changed gained a new `[Unreleased]` entry vs the PR base. No token, no commits, no side effects.
+- **Repo config file.** Drop a `.releasegen.yaml` (or `.releasegen.yml`) at your repo root to declare `custom_change_types`, `exclude_dirs`, and the self-release overrides in one place instead of duplicating them across workflows.
+- **Config via flags, env, or file.** Every option resolves with precedence **flags > env > `.releasegen.yaml` > built-in defaults**.
 - **Custom change types.** Map your own changelog headings (e.g. `Documentation`) to a specific bump level.
 - **Debug logging.** `--debug` traces tag discovery and module-name extraction for troubleshooting.
 - **Secure by default.** Bearer tokens are scrubbed from Git push errors before they reach the logs.
@@ -92,7 +95,7 @@ releasegen --dry-run \
   --token "$GH_TOKEN"
 ```
 
-When you're ready to automate it, drop the [example GitHub Actions workflow](#workflow-example) into `.github/workflows/`.
+When you're ready to automate it, drop the [example GitHub Actions workflows](#workflow-examples) into `.github/workflows/` — one for PR-time validation, one to cut the release on merge.
 
 ## How It Works
 
@@ -203,7 +206,52 @@ If your release branch is protected (required reviews, status checks, etc.), the
 
    Repeat for every protected branch the workflow releases from (e.g. `main`, `v6`, etc.).
 
-### Workflow Example
+### Workflow Examples
+
+ReleaseGen is designed for a **two-workflow** setup: one fast, side-effect-free check on every pull request, and one release workflow that runs after merge. The validate workflow catches malformed changelog entries (missed `BREAKING CHANGE` markers, unknown headings, typos) before they're committed to your release branch.
+
+#### Validate Workflow (PR check)
+
+This runs on every pull request, needs no GitHub App token, and fails the PR if any changelog is malformed. Add it as a required status check on your release branch.
+
+```yaml
+name: Validate Changelog
+
+on:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate changelogs
+        run: |
+          docker run --rm \
+            -v "$(pwd):/workspace" \
+            ghcr.io/c2fo/releasegen:latest \
+            validate --repo-root /workspace
+```
+
+> If a `.releasegen.yaml` exists at the repo root, `validate` reads `custom_change_types`, `exclude_dirs`, and the `validate:` block from it automatically — no need to repeat them here. Exits `0` if every `## [Unreleased]` is valid (including empty), `2` if any are malformed.
+
+#### Enforcing a changelog entry on every PR
+
+Set `validate.require_changelog_entry: true` in `.releasegen.yaml` (or pass `--require-changelog-entry`) to fail the PR when a module's non-`CHANGELOG.md` files changed vs the base ref but its `[Unreleased]` section gained no new lines. Modules are scoped by where `CHANGELOG.md` lives; the root changelog catches every file not claimed by a submodule changelog.
+
+```yaml
+validate:
+  require_changelog_entry: true
+  # base_ref: origin/main   # optional; defaults to origin/$GITHUB_BASE_REF on PRs, else origin/main
+```
+
+The GitHub Actions `pull_request` event sets `GITHUB_BASE_REF` automatically, so the default works out of the box for PRs targeting any branch. `actions/checkout@v6` with `fetch-depth: 0` is required so the base ref resolves.
+
+#### Release Workflow
 
 ```yaml
 name: Release by Changelog
@@ -251,14 +299,6 @@ jobs:
           GITHUB_REF_NAME: ${{ github.event.inputs.branch || github.ref_name }}
           MANUAL_VERSION: ${{ github.event.inputs.version || '' }}
           REASON: ${{ github.event.inputs.reason || '' }}
-          # Optional: skip directories from changelog-based releases.
-          EXCLUDE_DIRS: |
-            some/app
-            some/other/app
-          # Optional: map custom headings to bump levels.
-          CUSTOM_CHANGE_TYPES: |
-            Documentation:minor
-            Performance:patch
         run: |
           docker run --rm \
             -e GITHUB_TOKEN \
@@ -267,14 +307,14 @@ jobs:
             -e GITHUB_REF_NAME \
             -e MANUAL_VERSION \
             -e REASON \
-            -e EXCLUDE_DIRS \
-            -e CUSTOM_CHANGE_TYPES \
             -v "$(pwd):/workspace" \
             ghcr.io/c2fo/releasegen:latest \
             --repo-root /workspace
 ```
 
 > The image entrypoint is `/usr/local/bin/release-gen`, so anything after the image name is passed straight to the CLI. Add `--dry-run` to preview without publishing, or `--summary-file /workspace/release-summary.json` to capture a machine-readable result.
+>
+> Repo-shape options like `custom_change_types` and `exclude_dirs` belong in a single [`.releasegen.yaml`](#configuration-file-releasegenyaml) at the repo root so both the validate workflow and the release workflow pick them up — no need to repeat them in each workflow's `env:` block. You can still override them per-run with env vars or flags.
 >
 > The example uses readable version tags for clarity. For production, pin actions to a commit SHA.
 
@@ -289,7 +329,44 @@ The `version` input maps to `MANUAL_VERSION` and `reason` to `REASON`; the reaso
 
 ## Configuration
 
-Every option can be set by environment variable or CLI flag. **Flags override environment variables, which override built-in defaults.**
+Every option can be set three ways: a `.releasegen.yaml` file at the repo root, environment variables, or CLI flags. **Precedence is flags > env > `.releasegen.yaml` > built-in defaults.**
+
+The split is deliberate: per-repo, rarely-changing options live in the file (so two workflows don't duplicate them), and per-invocation options stay in env/flags (where GitHub Actions sets them).
+
+### Configuration file (`.releasegen.yaml`)
+
+Drop a `.releasegen.yaml` (or `.releasegen.yml` — both are accepted) at your repo root:
+
+```yaml
+custom_change_types:
+  Documentation: minor
+  Performance: patch
+exclude_dirs:
+  - some/app
+  - some/other/app
+
+# Optional: validate subcommand knobs. Omit the block to leave them off.
+validate:
+  require_changelog_entry: true
+  # base_ref: origin/main
+
+# Advanced — only needed if you fork ReleaseGen or rename the binary's module.
+# self_release_module: ""
+# self_release_repo: c2fo/releasegen
+```
+
+| Key | Type | Description |
+| --- | ---- | ----------- |
+| `custom_change_types` | map of heading → bump | Extra changelog headings recognized in addition to the Keep a Changelog defaults. Bump must be `major`, `minor`, or `patch`. |
+| `exclude_dirs` | list of paths | Directory prefixes to skip during changelog discovery. Trailing `/` is optional. |
+| `validate.require_changelog_entry` | bool | When true, `releasegen validate` fails any PR whose non-`CHANGELOG.md` files changed but whose `[Unreleased]` section gained no new lines vs `base_ref`. |
+| `validate.base_ref` | string | Git revision the `require_changelog_entry` check diffs against. Defaults to `origin/$GITHUB_BASE_REF` on GitHub Actions PR runs, else `origin/main`. |
+| `self_release_module` | string | (Advanced) Module path that triggers self-release stdout output. Empty means the root module. |
+| `self_release_repo` | string | (Advanced) `owner/repo` that activates self-release output. Set to `""` to disable. |
+
+Unknown keys cause a configuration error (exit code `1`) so typos surface early instead of being silently ignored.
+
+### Flag / environment reference
 
 | Environment Variable | CLI Flag | Required | Description |
 | -------------------- | -------- | :------: | ----------- |
@@ -304,6 +381,8 @@ Every option can be set by environment variable or CLI flag. **Flags override en
 | `REPO_ROOT` | `--repo-root` | | Path to the Git working tree (default `.`). |
 | `SUMMARY_FILE` | `--summary-file` | | Write a JSON summary of the run to this path. |
 | `DEBUG` | `--debug` | | Verbose tag/discovery diagnostics. |
+| `RELEASEGEN_REQUIRE_CHANGELOG_ENTRY` | `--require-changelog-entry` | | (validate only) Require an `[Unreleased]` gain for modules whose other files changed vs `--base-ref`. |
+| `RELEASEGEN_BASE_REF` | `--base-ref` | | (validate only) Git revision the changelog-entry check diffs against. Defaults to `origin/$GITHUB_BASE_REF` on PR runs, else `origin/main`. |
 | — | `--dry-run` | | Compute and print actions without writing anything. |
 | — | `--version` | | Print the build version and exit. |
 
@@ -357,7 +436,7 @@ Yes — set `EXCLUDE_DIRS` (or `--exclude-dirs`) to the directories you want to 
 Prefixing tags (e.g. `services/api/v1.2.3`) keeps releases organized and prevents collisions across modules.
 
 **Can I trigger a release from a specific branch?**
-Yes — use the `workflow_dispatch` trigger shown in the [workflow example](#workflow-example) and pick the branch.
+Yes — use the `workflow_dispatch` trigger shown in the [release workflow example](#release-workflow) and pick the branch.
 
 **Can I advance to a specific version?**
 Yes — set `MANUAL_VERSION` (or `--manual-version`, or the `version` workflow input). The value must be valid semver or the run exits with code `1`.
