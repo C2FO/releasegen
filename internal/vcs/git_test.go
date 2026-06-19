@@ -172,22 +172,30 @@ func (s *VCSTestSuite) TestChangedFilesAndFileAtRef() {
 	s.Require().Error(err)
 	s.Require().ErrorIs(err, vcs.ErrVCS)
 
-	// Pre-commit-style scenario: stage a brand-new file and modify an
-	// existing one WITHOUT committing. ChangedFiles must still report
-	// them — without this, prenup-style pre-commit validation would
-	// silently pass on a developer who'd staged code without updating
-	// the changelog.
+	// Pre-commit-style scenario: stage a new edit to an existing file
+	// AND drop an untracked + an unstaged-modified file alongside.
+	// Only the *staged* change must appear in ChangedFiles: unstaged
+	// worktree edits and untracked scratch files won't be in the next
+	// commit, so reporting them would cause callers like
+	// `validate --require-changelog-entry` to flag modules for local
+	// dirt the developer never intended to commit.
 	s.Require().NoError(os.WriteFile(filepath.Join(dir, "main.go"), []byte("package x\n// staged but not committed\n"), 0o600))
 	_, err = wt.Add("main.go")
 	s.Require().NoError(err)
 	s.Require().NoError(os.WriteFile(filepath.Join(dir, "untracked.go"), []byte("package x\n"), 0o600))
 	// Don't `git add` untracked.go — it stays untracked.
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "submodule", "foo.go"), []byte("package submodule\n// unstaged edit\n"), 0o600))
+	// Don't `git add` submodule/foo.go's new edit — the staged version
+	// is still the committed one, the worktree just has extra dirt.
 
 	changed, err = g.ChangedFiles(ctx, "base-tag")
 	s.Require().NoError(err)
 	s.Contains(changed, "main.go", "staged modification must be reported")
-	s.Contains(changed, "submodule/foo.go", "previously committed change must still be reported")
-	s.Contains(changed, "untracked.go", "untracked file (likely about to be added) must be reported")
+	s.Contains(changed, "submodule/foo.go", "previously committed change must still be reported (tree diff)")
+	s.NotContains(changed, "untracked.go", "untracked files are not staged and must not be reported")
+	// submodule/foo.go appears via the tree diff above, but its unstaged
+	// worktree edit on top of HEAD must not be what brings it in — that's
+	// already covered by the tree-diff assertion. Nothing else to check.
 }
 
 // TestFileAtIndex covers the three states FileAtIndex must disambiguate

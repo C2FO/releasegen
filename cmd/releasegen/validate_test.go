@@ -455,12 +455,13 @@ func (s *ValidateTestSuite) TestRequireChangelogEntry_EmptyBaseRefUsesDefault() 
 
 func (s *ValidateTestSuite) TestRequireChangelogEntry_CatchesStagedChangesPreCommit() {
 	// Regression: a prenup-style pre-commit hook runs while HEAD is still
-	// the parent commit. Without folding worktree status into ChangedFiles,
-	// validate would see "nothing changed since base" and pass on a
-	// developer who staged code without updating the changelog. This test
-	// asserts the fix: staged + unstaged + untracked changes count.
+	// the parent commit. Without folding the index/staged set into
+	// ChangedFiles, validate would see "nothing changed since base" and
+	// pass on a developer who staged code without updating the changelog.
+	// This test asserts the fix: a staged code change with no [Unreleased]
+	// entry must fail, even though HEAD itself has not moved.
 	f := s.newRequireEntryFixture()
-	// DO NOT commit. Stage a source file and touch one as untracked.
+	// DO NOT commit. Stage a source file edit (no changelog update).
 	full := filepath.Join(f.dir, "svc", "foo.go")
 	s.Require().NoError(os.WriteFile(full, []byte("package svc\n// staged but uncommitted\n"), 0o600))
 	_, err := f.wt.Add("svc/foo.go")
@@ -541,6 +542,52 @@ func (s *ValidateTestSuite) TestRequireChangelogEntry_StagedChangelogEditSatisfi
 	}
 	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
 	s.NoError(validateAll(context.Background(), cfg, paths, repo, s.log))
+}
+
+func (s *ValidateTestSuite) TestRequireChangelogEntry_IgnoresUnstagedAndUntrackedDirt() {
+	// Companion to the staged-only tightening of ChangedFiles. A
+	// developer with unstaged build-artifact edits and untracked scratch
+	// files lying around must NOT see false failures from validate: only
+	// what is actually staged (and therefore in the next commit) should
+	// be evaluated. Here the developer has properly staged both
+	// svc/foo.go and svc/CHANGELOG.md, so validate must pass even though
+	// the worktree is dirty.
+	f := s.newRequireEntryFixture()
+	// Stage code + matching changelog entry (the disciplined case).
+	full := filepath.Join(f.dir, "svc", "foo.go")
+	s.Require().NoError(os.WriteFile(full, []byte("package svc\n// staged code change\n"), 0o600))
+	_, err := f.wt.Add("svc/foo.go")
+	s.Require().NoError(err)
+	s.Require().NoError(os.WriteFile(
+		filepath.Join(f.dir, "svc", "CHANGELOG.md"),
+		[]byte("# Changelog\n\n## [Unreleased]\n### Added\n- did the thing\n"),
+		0o600,
+	))
+	_, err = f.wt.Add("svc/CHANGELOG.md")
+	s.Require().NoError(err)
+	// Now sprinkle local dirt: an unstaged edit to a previously
+	// committed file in the root module and a brand-new untracked file
+	// in the svc module. Both must be ignored.
+	s.Require().NoError(os.WriteFile(
+		filepath.Join(f.dir, "main.go"),
+		[]byte("package x\n// unstaged scratch edit\n"),
+		0o600,
+	))
+	s.Require().NoError(os.WriteFile(
+		filepath.Join(f.dir, "svc", "scratch.log"),
+		[]byte("temp build log\n"),
+		0o600,
+	))
+
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "base-tag",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	s.NoError(validateAll(context.Background(), cfg, paths, repo, s.log),
+		"local dirt (unstaged edits + untracked files) must not cause validate to fail")
 }
 
 func (s *ValidateTestSuite) TestRequireChangelogEntry_DisabledByDefault() {

@@ -8,12 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- `releasegen validate --require-changelog-entry` now folds staged, unstaged,
-  and untracked worktree changes into its diff against the base ref. Without
-  this, the check was a no-op under pre-commit hooks (e.g. prenup), because
-  HEAD is still the parent commit at that moment and a tree-only diff sees
-  nothing. Local pre-commit checks now catch missing `[Unreleased]` entries
-  just as reliably as CI does on a pushed commit.
+- `releasegen validate --require-changelog-entry` now folds *staged*
+  index changes into its diff against the base ref. Without this, the
+  check was a no-op under pre-commit hooks (e.g. prenup), because HEAD
+  is still the parent commit at that moment and a tree-only diff sees
+  nothing. Local pre-commit checks now catch missing `[Unreleased]`
+  entries just as reliably as CI does on a pushed commit. Unstaged
+  worktree edits and untracked files are deliberately excluded so
+  unrelated local dirt (build artifacts, half-finished edits, scratch
+  files) cannot cause false failures, and so the changed-file set
+  matches what `FileAtIndex` reads for the next-commit comparison.
 - `releasegen validate --require-changelog-entry` now compares the
   `[Unreleased]` section as it appears in the **git index** (the staged
   view of the next commit) rather than the working tree. Previously, a

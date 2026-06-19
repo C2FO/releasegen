@@ -215,17 +215,24 @@ func changelogBlobHash(c *object.Commit, changelogPath string) (plumbing.Hash, e
 	return entry.Hash, nil
 }
 
-// ChangedFiles returns the set of file paths that differ between the tree at
-// baseRef and the working state at HEAD — including staged and unstaged
-// worktree changes. The HEAD-vs-base portion is a two-dot diff (HEAD vs
-// baseRef directly), matching the behavior of `git diff <base>` rather than
-// the merge-base "three-dot" form.
+// ChangedFiles returns the set of file paths that differ between the tree
+// at baseRef and the state that *will be* at HEAD after the next commit —
+// i.e. the union of the HEAD-vs-base tree diff and any path currently
+// staged in the index. The HEAD-vs-base portion is a two-dot diff (HEAD vs
+// baseRef directly), matching `git diff <base>` rather than the merge-base
+// "three-dot" form.
 //
-// Including the worktree status is essential for pre-commit use cases
+// Including the staged portion is essential for pre-commit use cases
 // (e.g. a prenup hook). Without it, ChangedFiles would only see what is
 // already in HEAD, which during a pre-commit hook is still the unchanged
 // parent commit — and the caller would conclude "nothing changed" even
 // when the developer has staged a hundred lines of new code.
+//
+// Unstaged worktree edits and untracked files are deliberately ignored:
+// they will not be in the commit being created, and counting them would
+// (a) flag callers like `validate --require-changelog-entry` for local
+// dirt unrelated to the commit and (b) disagree with FileAtIndex, which
+// also reads the staged/index view.
 //
 // baseRef may be any revision spec go-git can resolve (branch name, tag,
 // remote-tracking ref like "origin/main", or a raw hash). When baseRef does
@@ -290,9 +297,20 @@ func collectTreeDiff(baseTree, headTree *object.Tree, baseRef string, seen map[s
 	return nil
 }
 
-// collectWorktreeChanges records any non-Unmodified path from the worktree
-// status (staged, unstaged, or untracked) in seen. This is what makes
-// ChangedFiles work for pre-commit hooks where HEAD has not yet moved.
+// collectWorktreeChanges records every path that has a *staged* change in
+// the index, so ChangedFiles reflects what will land in the next commit
+// when HEAD has not yet moved (the prenup / pre-commit case).
+//
+// We deliberately exclude paths whose only change is in the worktree
+// (st.Staging == git.Unmodified): such edits will not be in the commit
+// being created, so reporting them would cause `validate
+// --require-changelog-entry` to flag modules for unrelated local dirt
+// (build artifacts, half-finished edits, untracked scratch files) that
+// the developer never intended to commit. Limiting this to the staged
+// set also matches the index-based view used by FileAtIndex, keeping
+// the two halves of the validate check in agreement about what "next
+// commit" means. `git commit -a` is unaffected, because git stages
+// tracked-modified files before pre-commit hooks run.
 func (g *GitRepo) collectWorktreeChanges(seen map[string]struct{}) error {
 	wt, err := g.repo.Worktree()
 	if err != nil {
@@ -303,7 +321,12 @@ func (g *GitRepo) collectWorktreeChanges(seen map[string]struct{}) error {
 		return fmt.Errorf("%w: read worktree status: %w", ErrVCS, err)
 	}
 	for path, st := range status {
-		if st.Staging == git.Unmodified && st.Worktree == git.Unmodified {
+		// Skip both Unmodified (no change at all) and Untracked
+		// (present only in the worktree, never added to the index).
+		// Everything else — Modified / Added / Deleted / Renamed /
+		// Copied — means the index entry for this path differs from
+		// HEAD, which is exactly the "will be in the next commit" set.
+		if st.Staging == git.Unmodified || st.Staging == git.Untracked {
 			continue
 		}
 		seen[path] = struct{}{}
@@ -341,10 +364,16 @@ func (g *GitRepo) FileAtIndex(ctx context.Context, filePath string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("%w: open blob for %s in index: %w", ErrVCS, filePath, err)
 		}
-		data, err := io.ReadAll(reader)
-		_ = reader.Close()
-		if err != nil {
-			return "", fmt.Errorf("%w: read blob for %s in index: %w", ErrVCS, filePath, err)
+		data, readErr := io.ReadAll(reader)
+		closeErr := reader.Close()
+		// Prefer a ReadAll error, since it tells us the data is incomplete;
+		// surface Close on its own as a fallback so deferred I/O failures
+		// (e.g. underlying object storage hiccups) aren't silently swallowed.
+		switch {
+		case readErr != nil:
+			return "", fmt.Errorf("%w: read blob for %s in index: %w", ErrVCS, filePath, readErr)
+		case closeErr != nil:
+			return "", fmt.Errorf("%w: close blob reader for %s in index: %w", ErrVCS, filePath, closeErr)
 		}
 		return string(data), nil
 	}
