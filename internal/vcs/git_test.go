@@ -170,7 +170,83 @@ func (s *VCSTestSuite) TestChangedFilesAndFileAtRef() {
 	// An unresolvable ref produces an ErrVCS-wrapped error.
 	_, err = g.ChangedFiles(ctx, "no-such-ref")
 	s.Require().Error(err)
-	s.ErrorIs(err, vcs.ErrVCS)
+	s.Require().ErrorIs(err, vcs.ErrVCS)
+
+	// Pre-commit-style scenario: stage a brand-new file and modify an
+	// existing one WITHOUT committing. ChangedFiles must still report
+	// them — without this, prenup-style pre-commit validation would
+	// silently pass on a developer who'd staged code without updating
+	// the changelog.
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "main.go"), []byte("package x\n// staged but not committed\n"), 0o600))
+	_, err = wt.Add("main.go")
+	s.Require().NoError(err)
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "untracked.go"), []byte("package x\n"), 0o600))
+	// Don't `git add` untracked.go — it stays untracked.
+
+	changed, err = g.ChangedFiles(ctx, "base-tag")
+	s.Require().NoError(err)
+	s.Contains(changed, "main.go", "staged modification must be reported")
+	s.Contains(changed, "submodule/foo.go", "previously committed change must still be reported")
+	s.Contains(changed, "untracked.go", "untracked file (likely about to be added) must be reported")
+}
+
+// TestFileAtIndex covers the three states FileAtIndex must disambiguate
+// to keep pre-commit validation honest:
+//
+//  1. A staged modification — the index hash points at the new blob, so
+//     FileAtIndex must return the *staged* (next-commit) content, not the
+//     working-tree content and not the HEAD content.
+//  2. An unstaged worktree edit on an otherwise-tracked file — the index
+//     still points at HEAD's blob, so FileAtIndex must return the HEAD
+//     content. This is the bug that prompted the index-aware lookup:
+//     `unreleasedGained` previously read the worktree, which let a
+//     developer satisfy --require-changelog-entry by editing
+//     CHANGELOG.md and forgetting to `git add`.
+//  3. An untracked or staged-for-deletion path — not in the index, so
+//     FileAtIndex must return the empty string with no error.
+func (s *VCSTestSuite) TestFileAtIndex() {
+	dir := s.T().TempDir()
+	repo, err := git.PlainInit(dir, false)
+	s.Require().NoError(err)
+	wt, err := repo.Worktree()
+	s.Require().NoError(err)
+	sig := &object.Signature{Name: "tester", Email: "t@example.com", When: time.Now()}
+
+	writeAndAdd := func(rel, body string) {
+		s.Require().NoError(os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o750))
+		s.Require().NoError(os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600))
+		_, err := wt.Add(rel)
+		s.Require().NoError(err)
+	}
+
+	writeAndAdd("staged.go", "package x\n// committed body\n")
+	writeAndAdd("worktree.go", "package x\n// committed body\n")
+	_, err = wt.Commit("base", &git.CommitOptions{Author: sig})
+	s.Require().NoError(err)
+
+	// (1) Modify staged.go AND re-stage it. (2) Modify worktree.go but
+	// leave it unstaged. (3) Drop a fresh untracked file in.
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "staged.go"), []byte("package x\n// staged update\n"), 0o600))
+	_, err = wt.Add("staged.go")
+	s.Require().NoError(err)
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "worktree.go"), []byte("package x\n// worktree-only edit\n"), 0o600))
+	s.Require().NoError(os.WriteFile(filepath.Join(dir, "untracked.go"), []byte("package x\n"), 0o600))
+
+	g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
+	s.Require().NoError(err)
+	ctx := context.Background()
+
+	staged, err := g.FileAtIndex(ctx, "staged.go")
+	s.Require().NoError(err)
+	s.Equal("package x\n// staged update\n", staged, "FileAtIndex must return the staged blob, not HEAD or the worktree")
+
+	unstaged, err := g.FileAtIndex(ctx, "worktree.go")
+	s.Require().NoError(err)
+	s.Equal("package x\n// committed body\n", unstaged, "unstaged worktree edits must NOT leak through FileAtIndex")
+
+	missing, err := g.FileAtIndex(ctx, "untracked.go")
+	s.Require().NoError(err)
+	s.Empty(missing, "untracked files are absent from the index and must return empty, not error")
 }
 
 // TestCommitTagAndPush_PushedToBareRemote exercises the full

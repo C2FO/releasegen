@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path"
 	"sort"
@@ -215,10 +216,16 @@ func changelogBlobHash(c *object.Commit, changelogPath string) (plumbing.Hash, e
 }
 
 // ChangedFiles returns the set of file paths that differ between the tree at
-// baseRef and the tree at HEAD. The comparison is a two-dot diff (HEAD vs
+// baseRef and the working state at HEAD — including staged and unstaged
+// worktree changes. The HEAD-vs-base portion is a two-dot diff (HEAD vs
 // baseRef directly), matching the behavior of `git diff <base>` rather than
-// the merge-base "three-dot" form. For PR-time validation this is precise
-// enough and avoids a merge-base computation that go-git makes awkward.
+// the merge-base "three-dot" form.
+//
+// Including the worktree status is essential for pre-commit use cases
+// (e.g. a prenup hook). Without it, ChangedFiles would only see what is
+// already in HEAD, which during a pre-commit hook is still the unchanged
+// parent commit — and the caller would conclude "nothing changed" even
+// when the developer has staged a hundred lines of new code.
 //
 // baseRef may be any revision spec go-git can resolve (branch name, tag,
 // remote-tracking ref like "origin/main", or a raw hash). When baseRef does
@@ -248,13 +255,30 @@ func (g *GitRepo) ChangedFiles(ctx context.Context, baseRef string) ([]string, e
 	if err != nil {
 		return nil, fmt.Errorf("%w: load HEAD tree: %w", ErrVCS, err)
 	}
+	seen := make(map[string]struct{})
+	if err := collectTreeDiff(baseTree, headTree, baseRef, seen); err != nil {
+		return nil, err
+	}
+	if err := g.collectWorktreeChanges(seen); err != nil {
+		return nil, err
+	}
+
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// collectTreeDiff records every path differing between baseTree and headTree
+// in seen. Renames contribute both their From and To paths so callers can
+// reason about either name.
+func collectTreeDiff(baseTree, headTree *object.Tree, baseRef string, seen map[string]struct{}) error {
 	changes, err := baseTree.Diff(headTree)
 	if err != nil {
-		return nil, fmt.Errorf("%w: diff %q..HEAD: %w", ErrVCS, baseRef, err)
+		return fmt.Errorf("%w: diff %q..HEAD: %w", ErrVCS, baseRef, err)
 	}
-	// Use a map to deduplicate when a path appears as both From and To
-	// (e.g. a rename).
-	seen := make(map[string]struct{}, len(changes))
 	for _, c := range changes {
 		if c.From.Name != "" {
 			seen[c.From.Name] = struct{}{}
@@ -263,12 +287,68 @@ func (g *GitRepo) ChangedFiles(ctx context.Context, baseRef string) ([]string, e
 			seen[c.To.Name] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for p := range seen {
-		out = append(out, p)
+	return nil
+}
+
+// collectWorktreeChanges records any non-Unmodified path from the worktree
+// status (staged, unstaged, or untracked) in seen. This is what makes
+// ChangedFiles work for pre-commit hooks where HEAD has not yet moved.
+func (g *GitRepo) collectWorktreeChanges(seen map[string]struct{}) error {
+	wt, err := g.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("%w: open worktree: %w", ErrVCS, err)
 	}
-	sort.Strings(out)
-	return out, nil
+	status, err := wt.Status()
+	if err != nil {
+		return fmt.Errorf("%w: read worktree status: %w", ErrVCS, err)
+	}
+	for path, st := range status {
+		if st.Staging == git.Unmodified && st.Worktree == git.Unmodified {
+			continue
+		}
+		seen[path] = struct{}{}
+	}
+	return nil
+}
+
+// FileAtIndex returns the contents of filePath as it appears in the git
+// index — i.e. the version that will be written to the next commit. This is
+// the right "current state" for any pre-commit validation: comparing it
+// against the base ref tells us what the resulting commit will contain,
+// regardless of whether the developer has staged their changes or left
+// them in the worktree.
+//
+// When filePath is not in the index (untracked, or staged for deletion),
+// the empty string is returned with a nil error so callers can treat it
+// as "the file will not be in the next commit."
+func (g *GitRepo) FileAtIndex(ctx context.Context, filePath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	idx, err := g.repo.Storer.Index()
+	if err != nil {
+		return "", fmt.Errorf("%w: read index: %w", ErrVCS, err)
+	}
+	for _, entry := range idx.Entries {
+		if entry.Name != filePath {
+			continue
+		}
+		blob, err := g.repo.BlobObject(entry.Hash)
+		if err != nil {
+			return "", fmt.Errorf("%w: load blob for %s in index: %w", ErrVCS, filePath, err)
+		}
+		reader, err := blob.Reader()
+		if err != nil {
+			return "", fmt.Errorf("%w: open blob for %s in index: %w", ErrVCS, filePath, err)
+		}
+		data, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			return "", fmt.Errorf("%w: read blob for %s in index: %w", ErrVCS, filePath, err)
+		}
+		return string(data), nil
+	}
+	return "", nil
 }
 
 // FileAtRef returns the contents of the file at filePath as it appears in

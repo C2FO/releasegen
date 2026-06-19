@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `releasegen validate --require-changelog-entry` now folds staged, unstaged,
+  and untracked worktree changes into its diff against the base ref. Without
+  this, the check was a no-op under pre-commit hooks (e.g. prenup), because
+  HEAD is still the parent commit at that moment and a tree-only diff sees
+  nothing. Local pre-commit checks now catch missing `[Unreleased]` entries
+  just as reliably as CI does on a pushed commit.
+- `releasegen validate --require-changelog-entry` now compares the
+  `[Unreleased]` section as it appears in the **git index** (the staged
+  view of the next commit) rather than the working tree. Previously, a
+  developer who edited `CHANGELOG.md` but forgot to `git add` it would
+  see the pre-commit check pass — the worktree had the new entry — even
+  though the commit being created did not, leaving the gap to be caught
+  only in CI. The check now predicts the post-commit state correctly:
+  unstaged changelog edits no longer satisfy the requirement, and
+  `git commit -a` keeps working because git stages worktree changes
+  before pre-commit hooks run.
+
 ## [[v1.2.0](https://github.com/C2FO/releasegen/releases/tag/v1.2.0)] - 2026-06-18
 ### Added
 - New `releasegen validate` subcommand. Parses every `## [Unreleased]` section

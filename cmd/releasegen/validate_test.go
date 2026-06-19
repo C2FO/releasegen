@@ -453,6 +453,96 @@ func (s *ValidateTestSuite) TestRequireChangelogEntry_EmptyBaseRefUsesDefault() 
 	s.Contains(err.Error(), "origin/main")
 }
 
+func (s *ValidateTestSuite) TestRequireChangelogEntry_CatchesStagedChangesPreCommit() {
+	// Regression: a prenup-style pre-commit hook runs while HEAD is still
+	// the parent commit. Without folding worktree status into ChangedFiles,
+	// validate would see "nothing changed since base" and pass on a
+	// developer who staged code without updating the changelog. This test
+	// asserts the fix: staged + unstaged + untracked changes count.
+	f := s.newRequireEntryFixture()
+	// DO NOT commit. Stage a source file and touch one as untracked.
+	full := filepath.Join(f.dir, "svc", "foo.go")
+	s.Require().NoError(os.WriteFile(full, []byte("package svc\n// staged but uncommitted\n"), 0o600))
+	_, err := f.wt.Add("svc/foo.go")
+	s.Require().NoError(err)
+
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "base-tag",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	err = validateAll(context.Background(), cfg, paths, repo, s.log)
+	s.Require().Error(err, "validate must fail on staged-but-uncommitted code changes without a changelog entry")
+	s.Contains(err.Error(), "svc/CHANGELOG.md")
+	s.Contains(err.Error(), "[Unreleased] section gained no new lines")
+}
+
+func (s *ValidateTestSuite) TestRequireChangelogEntry_UnstagedChangelogEditDoesNotSatisfyCheck() {
+	// Regression: a developer stages svc/foo.go, runs the commit, prenup
+	// fires validate, the check fails because no [Unreleased] entry exists.
+	// They then edit svc/CHANGELOG.md but forget `git add` and run commit
+	// again. The worktree now has the new entry, but only the staged tree
+	// will be committed — and the staged tree still lacks the entry.
+	// Validate must fail, otherwise the developer silently commits code
+	// without the matching changelog line and only CI catches it.
+	f := s.newRequireEntryFixture()
+	// Stage a source file.
+	full := filepath.Join(f.dir, "svc", "foo.go")
+	s.Require().NoError(os.WriteFile(full, []byte("package svc\n// staged code change\n"), 0o600))
+	_, err := f.wt.Add("svc/foo.go")
+	s.Require().NoError(err)
+	// Edit the changelog in the worktree but DO NOT stage it.
+	clPath := filepath.Join(f.dir, "svc", "CHANGELOG.md")
+	s.Require().NoError(os.WriteFile(
+		clPath,
+		[]byte("# Changelog\n\n## [Unreleased]\n### Added\n- did the thing\n"),
+		0o600,
+	))
+
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "base-tag",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	err = validateAll(context.Background(), cfg, paths, repo, s.log)
+	s.Require().Error(err, "validate must reject a changelog edit that was never staged")
+	s.Contains(err.Error(), "svc/CHANGELOG.md")
+	s.Contains(err.Error(), "[Unreleased] section gained no new lines")
+}
+
+func (s *ValidateTestSuite) TestRequireChangelogEntry_StagedChangelogEditSatisfiesCheck() {
+	// Companion to UnstagedChangelogEdit*: same setup, but the developer
+	// remembers to `git add svc/CHANGELOG.md`. With both files staged, the
+	// next commit will contain both, so validate must pass.
+	f := s.newRequireEntryFixture()
+	full := filepath.Join(f.dir, "svc", "foo.go")
+	s.Require().NoError(os.WriteFile(full, []byte("package svc\n// staged code change\n"), 0o600))
+	_, err := f.wt.Add("svc/foo.go")
+	s.Require().NoError(err)
+	clRel := "svc/CHANGELOG.md"
+	clPath := filepath.Join(f.dir, clRel)
+	s.Require().NoError(os.WriteFile(
+		clPath,
+		[]byte("# Changelog\n\n## [Unreleased]\n### Added\n- did the thing\n"),
+		0o600,
+	))
+	_, err = f.wt.Add(clRel)
+	s.Require().NoError(err)
+
+	repo := f.repoOpen()
+	cfg := &config.Config{
+		RepoRoot:              f.dir,
+		RequireChangelogEntry: true,
+		BaseRef:               "base-tag",
+	}
+	paths := []string{"CHANGELOG.md", "svc/CHANGELOG.md"}
+	s.NoError(validateAll(context.Background(), cfg, paths, repo, s.log))
+}
+
 func (s *ValidateTestSuite) TestRequireChangelogEntry_DisabledByDefault() {
 	f := s.newRequireEntryFixture()
 	f.write("svc/foo.go", "package svc\n// updated\n")
