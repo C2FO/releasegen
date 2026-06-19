@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [[v1.2.1](https://github.com/C2FO/releasegen/releases/tag/v1.2.1)] - 2026-06-19
 ### Fixed
 - `releasegen validate --require-changelog-entry` now folds *staged*
   index changes into its diff against the base ref. Without this, the
