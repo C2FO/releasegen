@@ -195,7 +195,7 @@ func validateAll(
 		}
 		log.Debug("require_changelog_entry enabled", "base_ref", base)
 		var err error
-		entryProblems, err = collectEntryProblems(ctx, cfg, paths, repo, base, log)
+		entryProblems, err = collectEntryProblems(ctx, paths, repo, base, log)
 		if err != nil {
 			return cliError{code: exitVCSErr, err: err}
 		}
@@ -263,7 +263,6 @@ func validatePaths(cfg *config.Config, paths []string, log *slog.Logger) error {
 // them with content-validation problems in one report.
 func collectEntryProblems(
 	ctx context.Context,
-	cfg *config.Config,
 	paths []string,
 	repo *vcs.GitRepo,
 	base string,
@@ -322,7 +321,7 @@ func collectEntryProblems(
 		if !st.nonChangelogHit {
 			continue
 		}
-		gained, err := unreleasedGained(ctx, repo, base, st.changelog, cfg.RepoRoot)
+		gained, err := unreleasedGained(ctx, repo, base, st.changelog)
 		if err != nil {
 			problems = append(problems, changelogProblem{
 				path: st.changelog,
@@ -370,25 +369,32 @@ func assignModule(f string, prefixes map[string]string, hasRoot bool) string {
 }
 
 // unreleasedGained reports whether the [Unreleased] section of changelogPath
-// has more non-whitespace lines at HEAD than it did at base. A net-zero or
-// shrinking change counts as "no new content," which catches both the
-// "didn't touch the changelog" case and the (rarer) "edited a versioned
-// section but not [Unreleased]" case.
+// has more non-whitespace lines in the *next commit* than it did at base.
+// A net-zero or shrinking change counts as "no new content," which catches
+// both the "didn't touch the changelog" case and the (rarer) "edited a
+// versioned section but not [Unreleased]" case.
+//
+// We deliberately read the index (staged) version rather than the working
+// tree: when this runs as a pre-commit hook, only what is staged will be
+// committed, and we want validation to predict the post-commit state. An
+// unstaged worktree edit to CHANGELOG.md will not survive the commit, so
+// it must not satisfy this check — otherwise developers can silently
+// commit code without their changelog updates and only discover the gap
+// in CI.
 func unreleasedGained(
 	ctx context.Context,
 	repo *vcs.GitRepo,
-	base, changelogPath, repoRoot string,
+	base, changelogPath string,
 ) (bool, error) {
 	baseBody, err := repo.FileAtRef(ctx, base, changelogPath)
 	if err != nil {
 		return false, err
 	}
-	headPath := filepath.Join(repoRoot, changelogPath)
-	headBytes, err := os.ReadFile(headPath) //nolint:gosec // path comes from repo discovery
+	headBody, err := repo.FileAtIndex(ctx, changelogPath)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", changelogPath, err)
+		return false, fmt.Errorf("read %s from index: %w", changelogPath, err)
 	}
-	headLines := countNonWhitespaceLines(changelog.ExtractUnreleased(string(headBytes)))
+	headLines := countNonWhitespaceLines(changelog.ExtractUnreleased(headBody))
 	baseLines := countNonWhitespaceLines(changelog.ExtractUnreleased(baseBody))
 	return headLines > baseLines, nil
 }
