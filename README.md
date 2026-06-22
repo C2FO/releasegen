@@ -1,5 +1,11 @@
 ![ReleaseGen — changelog-driven releases, automated](docs/images/releasegen-logo.png)
 
+[![GitHub tag](https://img.shields.io/github/tag/c2fo/releasegen.svg?style=flat)](https://github.com/c2fo/releasegen/releases)
+[![GoDoc](https://pkg.go.dev/badge/github.com/c2fo/releasegen?utm_source=godoc)](https://pkg.go.dev/github.com/c2fo/releasegen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.md)
+[![Go Report Card](https://goreportcard.com/badge/github.com/c2fo/releasegen)](https://goreportcard.com/report/github.com/c2fo/releasegen)
+[![Last Commit](https://img.shields.io/github/last-commit/c2fo/releasegen)](https://github.com/c2fo/releasegen/commits/main)
+
 # ReleaseGen
 
 > Turn the `CHANGELOG.md` you already maintain into versioned Git tags and GitHub Releases — automatically.
