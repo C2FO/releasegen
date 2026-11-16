@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [[v1.3.0](https://github.com/C2FO/releasegen/releases/tag/v1.3.0)] - 2026-11-16
 ### Security
 - [CHAN-29432](https://honeycomb.jira.com/browse/CHAN-29432) - Upgrades `github.com/go-git/go-git/v5` from v5.19.1 to v5.19.2 (GHSA-qgq7-7hm3-q39j, GHSA-hc8v-wwc9-vgxm).
 
