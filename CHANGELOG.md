@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Security
-- [CHAN-29432](https://honeycomb.jira.com/browse/CHAN-29432) - Upgrade `github.com/go-git/go-git/v5` from v5.19.1 to v5.19.2 (GHSA-qgq7-7hm3-q39j, GHSA-hc8v-wwc9-vgxm).
+- [CHAN-29432](https://honeycomb.jira.com/browse/CHAN-29432) - Upgrades `github.com/go-git/go-git/v5` from v5.19.1 to v5.19.2 (GHSA-qgq7-7hm3-q39j, GHSA-hc8v-wwc9-vgxm).
 
 ## [[v1.2.2](https://github.com/C2FO/releasegen/releases/tag/v1.2.2)] - 2026-06-22
 ### Documentation
