@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [[v1.3.1](https://github.com/C2FO/releasegen/releases/tag/v1.3.1)] - 2026-11-20
 ### Fixed
 - Commands that open a repository, including `validate`, now work in linked
   git worktrees. Previously they failed with `resolve HEAD: reference not
