@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Commands that open a repository, including `validate`, now work in linked
+  git worktrees. Previously they failed with `resolve HEAD: reference not
+  found` because go-git was not told to follow the worktree's common git
+  directory ([#11](https://github.com/C2FO/releasegen/issues/11)).
 
 ## [[v1.3.0](https://github.com/C2FO/releasegen/releases/tag/v1.3.0)] - 2026-11-16
 ### Security
