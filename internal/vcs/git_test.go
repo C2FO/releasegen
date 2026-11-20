@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -319,4 +320,50 @@ func (s *VCSTestSuite) TestCommitTagAndPush_OpenFailureWrapsErrVCS() {
 	_, err := vcs.Open(filepath.Join(s.T().TempDir(), "does-not-exist"), "main", slog.New(slog.DiscardHandler))
 	s.Require().Error(err)
 	s.Require().ErrorIs(err, vcs.ErrVCS)
+}
+
+// TestOpen_LinkedWorktree pins that a linked worktree, whose .git is a file
+// pointing at <main>/.git/worktrees/<name>, resolves HEAD, refs and the index
+// through the shared common dir just like a normal checkout.
+func (s *VCSTestSuite) TestOpen_LinkedWorktree() {
+	// Keep git commands inside the temp repository even when this test runs
+	// from a git hook or under a developer's global config.
+	for _, k := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR"} {
+		s.T().Setenv(k, "")
+		s.Require().NoError(os.Unsetenv(k))
+	}
+	s.T().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	s.T().Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	main := s.T().TempDir()
+	runGit := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed binary, test-controlled args.
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		s.Require().NoErrorf(err, "git %v: %s", args, out)
+	}
+	runGit(main, "init", "-b", "main")
+	runGit(main, "config", "user.email", "t@example.com")
+	runGit(main, "config", "user.name", "tester")
+	runGit(main, "config", "commit.gpgsign", "false")
+	s.Require().NoError(os.WriteFile(filepath.Join(main, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600))
+	runGit(main, "add", "CHANGELOG.md")
+	runGit(main, "commit", "-m", "base")
+
+	linked := filepath.Join(s.T().TempDir(), "wt")
+	runGit(main, "worktree", "add", "-b", "feat", linked)
+	s.Require().NoError(os.WriteFile(filepath.Join(linked, "CHANGELOG.md"), []byte("# Changelog\nstaged\n"), 0o600))
+	runGit(linked, "add", "CHANGELOG.md")
+
+	g, err := vcs.Open(linked, "main", slog.New(slog.DiscardHandler))
+	s.Require().NoError(err)
+	ctx := context.Background()
+
+	paths, err := g.AllChangelogPaths(ctx)
+	s.Require().NoError(err, "HEAD must resolve through the worktree's common dir")
+	s.Equal([]string{"CHANGELOG.md"}, paths)
+
+	staged, err := g.FileAtIndex(ctx, "CHANGELOG.md")
+	s.Require().NoError(err)
+	s.Equal("# Changelog\nstaged\n", staged, "the worktree's own index must be read")
 }

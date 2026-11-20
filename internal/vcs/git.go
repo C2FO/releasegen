@@ -34,7 +34,10 @@ func Open(repoPath, branch string, log *slog.Logger) (*GitRepo, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	r, err := git.PlainOpen(repoPath)
+	// EnableDotGitCommonDir makes go-git follow a linked worktree's commondir
+	// file so refs, objects and config come from the main repository's .git
+	// rather than <main>/.git/worktrees/<name>.
+	r, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
 	if err != nil {
 		return nil, fmt.Errorf("%w: open repository at %q: %w", ErrVCS, repoPath, err)
 	}
