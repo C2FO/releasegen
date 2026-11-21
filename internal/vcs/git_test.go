@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -372,8 +371,72 @@ func (s *VCSTestSuite) TestOpen_LinkedWorktree() {
 // TestOpen_RelativeWorktreesExtension pins that a repository declaring
 // extensions.relativeworktrees, which git writes into the shared config for
 // relative worktree links, still opens from the main checkout and from linked
-// worktrees whose .git file uses an absolute or a relative gitdir.
+// worktrees whose .git file uses an absolute or a relative gitdir, and that
+// the worktree's own index is read.
 func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
+	main, runGit := s.newRepoWithEnv()
+	absWT := filepath.Join(s.T().TempDir(), "abs")
+	relWT := filepath.Join(s.T().TempDir(), "rel")
+	runGit(main, "worktree", "add", "-b", "abs", absWT)
+	runGit(main, "worktree", "add", "-b", "rel", relWT)
+
+	repair := exec.Command("git", "worktree", "repair", "--relative-paths")
+	repair.Dir = main
+	if out, err := repair.CombinedOutput(); err != nil {
+		s.T().Skipf("installed git does not support worktree repair --relative-paths: %s", out)
+	}
+
+	for name, dir := range map[string]string{"main checkout": main, "linked worktree": absWT, "relative linked worktree": relWT} {
+		s.Run(name, func() {
+			s.Require().NoError(os.WriteFile(filepath.Join(dir, "CHANGELOG.md"), []byte("# Changelog\nstaged "+name+"\n"), 0o600))
+			runGit(dir, "add", "CHANGELOG.md")
+
+			g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
+			s.Require().NoError(err)
+			ctx := context.Background()
+			paths, err := g.AllChangelogPaths(ctx)
+			s.Require().NoError(err)
+			s.Equal([]string{"CHANGELOG.md"}, paths)
+			staged, err := g.FileAtIndex(ctx, "CHANGELOG.md")
+			s.Require().NoError(err)
+			s.Equal("# Changelog\nstaged "+name+"\n", staged)
+		})
+	}
+}
+
+// TestOpen_OtherUnknownExtensionStillFails pins that hiding
+// relativeworktrees does not loosen go-git's check for any other extension,
+// and that the original extension error is reported.
+func (s *VCSTestSuite) TestOpen_OtherUnknownExtensionStillFails() {
+	main, runGit := s.newRepoWithEnv()
+	runGit(main, "config", "core.repositoryformatversion", "1")
+	runGit(main, "config", "extensions.relativeWorktrees", "true")
+	runGit(main, "config", "extensions.somethingElse", "true")
+
+	_, err := vcs.Open(main, "main", slog.New(slog.DiscardHandler))
+	s.Require().Error(err)
+	s.Require().ErrorContains(err, "somethingelse")
+	s.Require().ErrorContains(err, "relativeworktrees, somethingelse", "the original error must be reported")
+}
+
+// TestOpen_RelativeWorktreesExtensionKeyCase pins that the extension is
+// hidden whatever case the config key is written in.
+func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtensionKeyCase() {
+	main, runGit := s.newRepoWithEnv()
+	runGit(main, "config", "core.repositoryformatversion", "1")
+	runGit(main, "config", "extensions.relativeWorktrees", "true")
+
+	g, err := vcs.Open(main, "main", slog.New(slog.DiscardHandler))
+	s.Require().NoError(err)
+	paths, err := g.AllChangelogPaths(context.Background())
+	s.Require().NoError(err)
+	s.Equal([]string{"CHANGELOG.md"}, paths)
+}
+
+// newRepoWithEnv creates a repository with one committed CHANGELOG.md, scrubs
+// the git environment so commands stay inside it even under a hook or a
+// developer's global config, and returns the repo path and a git runner.
+func (s *VCSTestSuite) newRepoWithEnv() (string, func(dir string, args ...string)) {
 	for _, k := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR"} {
 		s.T().Setenv(k, "")
 		s.Require().NoError(os.Unsetenv(k))
@@ -395,28 +458,5 @@ func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
 	s.Require().NoError(os.WriteFile(filepath.Join(main, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600))
 	runGit(main, "add", "CHANGELOG.md")
 	runGit(main, "commit", "-m", "base")
-
-	absWT := filepath.Join(s.T().TempDir(), "abs")
-	relWT := filepath.Join(s.T().TempDir(), "rel")
-	runGit(main, "worktree", "add", "-b", "abs", absWT)
-	runGit(main, "worktree", "add", "-b", "rel", relWT)
-	runGit(main, "worktree", "repair", "--relative-paths")
-
-	// Skip rather than fail when the installed git predates the extension.
-	probe := exec.Command("git", "config", "--get", "extensions.relativeworktrees")
-	probe.Dir = main
-	out, err := probe.Output()
-	if err != nil || strings.TrimSpace(string(out)) != "true" {
-		s.T().Skip("installed git does not support --relative-paths")
-	}
-
-	for name, dir := range map[string]string{"main checkout": main, "linked worktree": absWT, "relative linked worktree": relWT} {
-		s.Run(name, func() {
-			g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
-			s.Require().NoError(err)
-			paths, err := g.AllChangelogPaths(context.Background())
-			s.Require().NoError(err)
-			s.Equal([]string{"CHANGELOG.md"}, paths)
-		})
-	}
+	return main, runGit
 }

@@ -35,7 +35,7 @@ func openRepository(repoPath string) (*git.Repository, error) {
 
 	r, fallbackErr := openIgnoringRelativeWorktrees(repoPath)
 	if fallbackErr != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (retry without %s: %w)", err, relativeWorktreesExtension, fallbackErr)
 	}
 	return r, nil
 }
@@ -46,7 +46,8 @@ func isExtensionError(err error) bool {
 }
 
 // openIgnoringRelativeWorktrees mirrors go-git's PlainOpenWithOptions for a
-// path that is the worktree root (no parent detection), but opens the storage
+// path that is the worktree root (no parent detection, no bare repositories),
+// but opens the storage
 // through a storer that hides the relativeworktrees extension.
 func openIgnoringRelativeWorktrees(repoPath string) (*git.Repository, error) {
 	root, err := filepath.Abs(repoPath)
