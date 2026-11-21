@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,4 +367,124 @@ func (s *VCSTestSuite) TestOpen_LinkedWorktree() {
 	staged, err := g.FileAtIndex(ctx, "CHANGELOG.md")
 	s.Require().NoError(err)
 	s.Equal("# Changelog\nstaged\n", staged, "the worktree's own index must be read")
+}
+
+// TestOpen_RelativeWorktreesExtension pins that a repository declaring
+// extensions.relativeworktrees, which git writes into the shared config for
+// relative worktree links, still opens from the main checkout and from linked
+// worktrees whose .git file uses an absolute or a relative gitdir, and that
+// the worktree's own index is read.
+func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
+	main, runGit := s.newRepoWithEnv()
+	absWT := filepath.Join(s.T().TempDir(), "abs")
+	relWT := filepath.Join(s.T().TempDir(), "rel")
+	runGit(main, "worktree", "add", "-b", "abs", absWT)
+	runGit(main, "worktree", "add", "-b", "rel", relWT)
+
+	// git rewrites every worktree's link as relative once the extension is
+	// enabled, so restore an absolute pointer for absWT to cover both forms.
+	repair := exec.Command("git", "worktree", "repair", "--relative-paths")
+	repair.Dir = main
+	if out, err := repair.CombinedOutput(); err != nil {
+		s.T().Skipf("installed git does not support worktree repair --relative-paths: %s", out)
+	}
+	absGitDir := filepath.Join(main, ".git", "worktrees", "abs")
+	s.Require().NoError(os.WriteFile(filepath.Join(absWT, ".git"), []byte("gitdir: "+absGitDir+"\n"), 0o600))
+	s.assertGitdirPointer(absWT, true)
+	s.assertGitdirPointer(relWT, false)
+
+	// Nest the symlink at a different depth than relWT so a lexical ".." walk
+	// from the alias lands somewhere other than the physical one.
+	aliasDir := filepath.Join(s.T().TempDir(), "nested", "deeper")
+	s.Require().NoError(os.MkdirAll(aliasDir, 0o750))
+	symlinked := filepath.Join(aliasDir, "alias")
+	s.Require().NoError(os.Symlink(relWT, symlinked))
+
+	for name, dir := range map[string]string{
+		"main checkout":                        main,
+		"absolute linked worktree":             absWT,
+		"relative linked worktree":             relWT,
+		"relative linked worktree via symlink": symlinked,
+	} {
+		s.Run(name, func() {
+			s.Require().NoError(os.WriteFile(filepath.Join(dir, "CHANGELOG.md"), []byte("# Changelog\nstaged "+name+"\n"), 0o600))
+			runGit(dir, "add", "CHANGELOG.md")
+
+			g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
+			s.Require().NoError(err)
+			ctx := context.Background()
+			paths, err := g.AllChangelogPaths(ctx)
+			s.Require().NoError(err)
+			s.Equal([]string{"CHANGELOG.md"}, paths)
+			staged, err := g.FileAtIndex(ctx, "CHANGELOG.md")
+			s.Require().NoError(err)
+			s.Equal("# Changelog\nstaged "+name+"\n", staged)
+		})
+	}
+}
+
+// assertGitdirPointer checks whether the worktree's .git file points at its
+// git directory with an absolute or a relative path.
+func (s *VCSTestSuite) assertGitdirPointer(worktree string, absolute bool) {
+	b, err := os.ReadFile(filepath.Join(worktree, ".git")) //nolint:gosec // G304: test-controlled path.
+	s.Require().NoError(err)
+	target := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(string(b), "\n", 2)[0], "gitdir:"))
+	s.Equal(absolute, filepath.IsAbs(target), "unexpected gitdir pointer %q in %s", target, worktree)
+}
+
+// TestOpen_OtherUnknownExtensionStillFails pins that hiding
+// relativeworktrees does not loosen go-git's check for any other extension,
+// and that the original extension error is reported.
+func (s *VCSTestSuite) TestOpen_OtherUnknownExtensionStillFails() {
+	main, runGit := s.newRepoWithEnv()
+	runGit(main, "config", "core.repositoryformatversion", "1")
+	runGit(main, "config", "extensions.relativeWorktrees", "true")
+	runGit(main, "config", "extensions.somethingElse", "true")
+
+	_, err := vcs.Open(main, "main", slog.New(slog.DiscardHandler))
+	s.Require().Error(err)
+	s.Require().ErrorContains(err, "somethingelse")
+	s.Require().ErrorContains(err, "relativeworktrees, somethingelse", "the original error must be reported")
+}
+
+// TestOpen_RelativeWorktreesExtensionKeyCase pins that the extension is
+// hidden whatever case the config key is written in.
+func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtensionKeyCase() {
+	main, runGit := s.newRepoWithEnv()
+	runGit(main, "config", "core.repositoryformatversion", "1")
+	runGit(main, "config", "extensions.relativeWorktrees", "true")
+
+	g, err := vcs.Open(main, "main", slog.New(slog.DiscardHandler))
+	s.Require().NoError(err)
+	paths, err := g.AllChangelogPaths(context.Background())
+	s.Require().NoError(err)
+	s.Equal([]string{"CHANGELOG.md"}, paths)
+}
+
+// newRepoWithEnv creates a repository with one committed CHANGELOG.md, scrubs
+// the git environment so commands stay inside it even under a hook or a
+// developer's global config, and returns the repo path and a git runner.
+func (s *VCSTestSuite) newRepoWithEnv() (string, func(dir string, args ...string)) {
+	for _, k := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR"} {
+		s.T().Setenv(k, "")
+		s.Require().NoError(os.Unsetenv(k))
+	}
+	s.T().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	s.T().Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	main := s.T().TempDir()
+	runGit := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed binary, test-controlled args.
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		s.Require().NoErrorf(err, "git %v: %s", args, out)
+	}
+	runGit(main, "init", "-b", "main")
+	runGit(main, "config", "user.email", "t@example.com")
+	runGit(main, "config", "user.name", "tester")
+	runGit(main, "config", "commit.gpgsign", "false")
+	s.Require().NoError(os.WriteFile(filepath.Join(main, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600))
+	runGit(main, "add", "CHANGELOG.md")
+	runGit(main, "commit", "-m", "base")
+	return main, runGit
 }
