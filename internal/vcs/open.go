@@ -28,12 +28,23 @@ const relativeWorktreesExtension = "relativeworktrees"
 // it does not know, including relativeworktrees; when that is the only reason
 // the open failed, it retries with that extension hidden from go-git's check.
 func openRepository(repoPath string) (*git.Repository, error) {
-	r, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+	// A relative gitdir or commondir is resolved by git against the checkout's
+	// physical location. go-git joins it lexically, so opening a worktree
+	// through a symlink would resolve "../main" next to the symlink instead.
+	root, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %q: %w", repoPath, err)
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		root = resolved
+	}
+
+	r, err := git.PlainOpenWithOptions(root, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
 	if err == nil || !isExtensionError(err) {
 		return r, err
 	}
 
-	r, fallbackErr := openIgnoringRelativeWorktrees(repoPath)
+	r, fallbackErr := openIgnoringRelativeWorktrees(root)
 	if fallbackErr != nil {
 		return nil, fmt.Errorf("%w (retry without %s: %w)", err, relativeWorktreesExtension, fallbackErr)
 	}
@@ -47,13 +58,9 @@ func isExtensionError(err error) bool {
 
 // openIgnoringRelativeWorktrees mirrors go-git's PlainOpenWithOptions for a
 // path that is the worktree root (no parent detection, no bare repositories),
-// but opens the storage
-// through a storer that hides the relativeworktrees extension.
-func openIgnoringRelativeWorktrees(repoPath string) (*git.Repository, error) {
-	root, err := filepath.Abs(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolving %q: %w", repoPath, err)
-	}
+// but opens the storage through a storer that hides the relativeworktrees
+// extension.
+func openIgnoringRelativeWorktrees(root string) (*git.Repository, error) {
 	wt := osfs.New(root)
 
 	dot, err := dotGitFilesystem(root)

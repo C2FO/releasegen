@@ -10,7 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repositories that declare `extensions.relativeworktrees` (written by git for
   relative worktree links) now open. go-git rejects that extension, so releasegen
   retries with it hidden from go-git's check; it only changes how worktree
-  links are spelled, which go-git already resolves
+  links are spelled, which go-git already resolves. Repositories are also
+  opened by their physical path, so a worktree reached through a symlink
+  resolves relative `gitdir:` links correctly
   ([#15](https://github.com/C2FO/releasegen/issues/15)).
 - The repository's `.prenup.yaml` now uses the c2fo/prenup schema (`version: 1`)
   instead of the legacy `version: 2` format, so released prenup versions can

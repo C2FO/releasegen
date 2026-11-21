@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -380,13 +381,31 @@ func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
 	runGit(main, "worktree", "add", "-b", "abs", absWT)
 	runGit(main, "worktree", "add", "-b", "rel", relWT)
 
+	// git rewrites every worktree's link as relative once the extension is
+	// enabled, so restore an absolute pointer for absWT to cover both forms.
 	repair := exec.Command("git", "worktree", "repair", "--relative-paths")
 	repair.Dir = main
 	if out, err := repair.CombinedOutput(); err != nil {
 		s.T().Skipf("installed git does not support worktree repair --relative-paths: %s", out)
 	}
+	absGitDir := filepath.Join(main, ".git", "worktrees", "abs")
+	s.Require().NoError(os.WriteFile(filepath.Join(absWT, ".git"), []byte("gitdir: "+absGitDir+"\n"), 0o600))
+	s.assertGitdirPointer(absWT, true)
+	s.assertGitdirPointer(relWT, false)
 
-	for name, dir := range map[string]string{"main checkout": main, "linked worktree": absWT, "relative linked worktree": relWT} {
+	// Nest the symlink at a different depth than relWT so a lexical ".." walk
+	// from the alias lands somewhere other than the physical one.
+	aliasDir := filepath.Join(s.T().TempDir(), "nested", "deeper")
+	s.Require().NoError(os.MkdirAll(aliasDir, 0o750))
+	symlinked := filepath.Join(aliasDir, "alias")
+	s.Require().NoError(os.Symlink(relWT, symlinked))
+
+	for name, dir := range map[string]string{
+		"main checkout":                        main,
+		"absolute linked worktree":             absWT,
+		"relative linked worktree":             relWT,
+		"relative linked worktree via symlink": symlinked,
+	} {
 		s.Run(name, func() {
 			s.Require().NoError(os.WriteFile(filepath.Join(dir, "CHANGELOG.md"), []byte("# Changelog\nstaged "+name+"\n"), 0o600))
 			runGit(dir, "add", "CHANGELOG.md")
@@ -402,6 +421,15 @@ func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
 			s.Equal("# Changelog\nstaged "+name+"\n", staged)
 		})
 	}
+}
+
+// assertGitdirPointer checks whether the worktree's .git file points at its
+// git directory with an absolute or a relative path.
+func (s *VCSTestSuite) assertGitdirPointer(worktree string, absolute bool) {
+	b, err := os.ReadFile(filepath.Join(worktree, ".git")) //nolint:gosec // G304: test-controlled path.
+	s.Require().NoError(err)
+	target := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(string(b), "\n", 2)[0], "gitdir:"))
+	s.Equal(absolute, filepath.IsAbs(target), "unexpected gitdir pointer %q in %s", target, worktree)
 }
 
 // TestOpen_OtherUnknownExtensionStillFails pins that hiding
