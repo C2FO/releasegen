@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Repositories that declare `extensions.relativeworktrees` (written by git for
+  relative worktree links) now open. go-git rejects that extension, so releasegen
+  retries with it hidden from go-git's check; it only changes how worktree
+  links are spelled, which go-git already resolves
+  ([#15](https://github.com/C2FO/releasegen/issues/15)).
+- The repository's `.prenup.yaml` now uses the c2fo/prenup schema (`version: 1`)
+  instead of the legacy `version: 2` format, so released prenup versions can
+  run the pre-commit hook.
 
 ## [[v1.3.2](https://github.com/C2FO/releasegen/releases/tag/v1.3.2)] - 2026-11-21
 ### Fixed

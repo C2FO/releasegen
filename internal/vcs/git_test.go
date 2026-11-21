@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,4 +367,56 @@ func (s *VCSTestSuite) TestOpen_LinkedWorktree() {
 	staged, err := g.FileAtIndex(ctx, "CHANGELOG.md")
 	s.Require().NoError(err)
 	s.Equal("# Changelog\nstaged\n", staged, "the worktree's own index must be read")
+}
+
+// TestOpen_RelativeWorktreesExtension pins that a repository declaring
+// extensions.relativeworktrees, which git writes into the shared config for
+// relative worktree links, still opens from the main checkout and from linked
+// worktrees whose .git file uses an absolute or a relative gitdir.
+func (s *VCSTestSuite) TestOpen_RelativeWorktreesExtension() {
+	for _, k := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR"} {
+		s.T().Setenv(k, "")
+		s.Require().NoError(os.Unsetenv(k))
+	}
+	s.T().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	s.T().Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	main := s.T().TempDir()
+	runGit := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed binary, test-controlled args.
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		s.Require().NoErrorf(err, "git %v: %s", args, out)
+	}
+	runGit(main, "init", "-b", "main")
+	runGit(main, "config", "user.email", "t@example.com")
+	runGit(main, "config", "user.name", "tester")
+	runGit(main, "config", "commit.gpgsign", "false")
+	s.Require().NoError(os.WriteFile(filepath.Join(main, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600))
+	runGit(main, "add", "CHANGELOG.md")
+	runGit(main, "commit", "-m", "base")
+
+	absWT := filepath.Join(s.T().TempDir(), "abs")
+	relWT := filepath.Join(s.T().TempDir(), "rel")
+	runGit(main, "worktree", "add", "-b", "abs", absWT)
+	runGit(main, "worktree", "add", "-b", "rel", relWT)
+	runGit(main, "worktree", "repair", "--relative-paths")
+
+	// Skip rather than fail when the installed git predates the extension.
+	probe := exec.Command("git", "config", "--get", "extensions.relativeworktrees")
+	probe.Dir = main
+	out, err := probe.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		s.T().Skip("installed git does not support --relative-paths")
+	}
+
+	for name, dir := range map[string]string{"main checkout": main, "linked worktree": absWT, "relative linked worktree": relWT} {
+		s.Run(name, func() {
+			g, err := vcs.Open(dir, "main", slog.New(slog.DiscardHandler))
+			s.Require().NoError(err)
+			paths, err := g.AllChangelogPaths(context.Background())
+			s.Require().NoError(err)
+			s.Equal([]string{"CHANGELOG.md"}, paths)
+		})
+	}
 }

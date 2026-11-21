@@ -1,5 +1,8 @@
-# Prenup v2 configuration. See https://github.com/C2FO/prenup for docs.
-version: 2
+# .prenup.yaml — pre-commit checks managed by prenup.
+# What is this? Prenup runs configurable checks before each commit, scoped to
+# the parts of the repo that changed. Learn more and install:
+#   https://github.com/c2fo/prenup
+version: 1
 module_markers:
   - go.mod
 exclude:
