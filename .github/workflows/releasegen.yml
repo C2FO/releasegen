@@ -60,6 +60,11 @@ jobs:
           # in .releasegen.yaml at the repo root so this workflow does not
           # have to keep them in sync with the validate workflow.
         run: |
+          # pipefail: without it the VERSION=$(... | tail) substitution takes
+          # tail's exit status, so a failing release-gen (for example a
+          # rejected tag push) would leave the job green and silently skip the
+          # image build below.
+          set -euo pipefail
           go build -trimpath -ldflags "-s -w" -o release-gen ./cmd/releasegen
           # releasegen prints the self-release version on stdout (and only
           # when releasegen itself was the module released this run); all
